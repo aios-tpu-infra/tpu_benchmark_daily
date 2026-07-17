@@ -1,0 +1,69 @@
+# TPU daily benchmark
+
+This project runs a reproducible Qwen3.5-397B-A17B-FP8 throughput benchmark on
+TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-in
+`models/` directory contains only an offline configuration/tokenizer snapshot.
+
+## Layout
+
+- `third_party/torchtpu-vllm/`: Git submodule, refreshed from `origin/main`.
+- `third_party/torch_tpu/`: Git submodule, refreshed from `origin/main` and
+  built locally with Bazel.
+- `models/`: offline model metadata; no checkpoint weights.
+- `scripts/run.sh`: starts the vLLM server with `--load-format dummy`.
+- `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64.
+- `scripts/update_environment.sh`: updates both submodules, builds and installs
+  `torch_tpu`, then synchronizes the project `.venv`.
+- `scripts/daily_benchmark.sh`: complete locked cron workflow.
+- `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
+
+## First preparation
+
+The machine needs `git`, `uv`, and Bazelisk (or Bazel). SSH access to GitHub is
+required for the `git@github.com:google-pytorch/torch_tpu.git` submodule. The
+first build also needs network access to the public Bazel, PyPI, and PyTorch CPU
+package sources.
+
+No Google Artifact Registry credential is required: the private `torch-tpu`
+package source declared by `torchtpu-vllm` is overridden with the wheel built
+from `third_party/torch_tpu`.
+
+Run:
+
+```bash
+scripts/daily_benchmark.sh --prepare-only
+```
+
+Each invocation fetches the latest `main` revision of both source projects,
+runs the official Python 3.12 wheel target with `--config=no_rbe`, and reinstalls
+that local wheel. Bazel reuses its incremental cache from `.runtime/bazel/`;
+built wheels are retained under `.runtime/wheels/`. The wheel keeps the
+compatibility version pinned by `torchtpu-vllm` and appends `+g<source SHA>` so
+the installed package remains both dependency-compatible and traceable.
+
+## Manual full run
+
+```bash
+scripts/daily_benchmark.sh
+```
+
+Before updating or building, the full workflow stops an existing vLLM API
+server listening on `PORT` (18100 by default), including its worker process
+group. A non-vLLM process on that port is never killed and causes the job to
+fail safely. `--prepare-only` leaves any running service untouched.
+
+The newly started server is stopped after the benchmark by default. Use
+`--keep-server-running` only for interactive debugging.
+
+## Example crontab
+
+Run every day at 02:00 UTC:
+
+```cron
+0 2 * * * /bin/bash /mnt/data/xiaohao/workspace/tpu_benchmark_daily/scripts/daily_benchmark.sh
+```
+
+The runner uses absolute project paths internally, takes an exclusive `flock`,
+and writes all output beneath `runs/<UTC timestamp>/`. The exact revisions of
+both subprojects and the locally built wheel version are saved in each run's
+`run_metadata.json`.

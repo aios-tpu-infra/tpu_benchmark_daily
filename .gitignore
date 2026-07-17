@@ -1,0 +1,20 @@
+# Project-local Python and runtime state.
+.venv/
+.runtime/
+.state/
+cache/
+runs/
+
+# Python/tool caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Model weights must never be committed to this metadata-only benchmark repo.
+models/**/*.safetensors
+models/**/*.bin
+models/**/*.pt
+models/**/*.pth
+models/**/*.gguf
+models/**/model.safetensors.index.json

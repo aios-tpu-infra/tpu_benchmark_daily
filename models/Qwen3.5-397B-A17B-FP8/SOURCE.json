@@ -1,0 +1,7 @@
+{
+  "model_id": "Qwen/Qwen3.5-397B-A17B-FP8",
+  "revision": "ea5b4f81096f3901c91dea97f81324302495781d",
+  "snapshot_date": "2026-07-17",
+  "weights_included": false,
+  "purpose": "Offline model metadata and tokenizer snapshot for vLLM --load-format dummy"
+}

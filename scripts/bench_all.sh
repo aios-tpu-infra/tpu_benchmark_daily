@@ -12,6 +12,7 @@ HOST="${BENCH_HOST:-127.0.0.1}"
 PORT="${PORT:-18100}"
 INPUT_LEN="${INPUT_LEN:-8192}"
 OUTPUT_LEN="${OUTPUT_LEN:-1}"
+PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 
 RUN_DIR="${1:-}"
 if (( $# > 0 )); then
@@ -33,6 +34,10 @@ fi
 if [[ ! -f "$MODEL_DIR/tokenizer.json" ]]; then
   echo "ERROR: local tokenizer metadata is missing: $MODEL_DIR" >&2
   exit 1
+fi
+if [[ "$PUBLISH_REPORTS" != 0 && "$PUBLISH_REPORTS" != 1 ]]; then
+  echo "ERROR: PUBLISH_REPORTS must be 0 or 1." >&2
+  exit 2
 fi
 
 export HF_HUB_OFFLINE=1
@@ -83,13 +88,20 @@ for concurrency in "${concurrencies[@]}"; do
     "$@"
 done
 
-"$VENV_DIR/bin/python" - "$RESULT_DIR" <<'PY'
+"$VENV_DIR/bin/python" - \
+  "$RESULT_DIR" \
+  "$INPUT_LEN" \
+  "$OUTPUT_LEN" \
+  "$SERVED_MODEL_NAME" <<'PY'
 import glob
 import json
 import os
 import sys
 
 result_dir = sys.argv[1]
+input_length = int(sys.argv[2])
+output_length = int(sys.argv[3])
+model = sys.argv[4]
 records = []
 for path in sorted(glob.glob(os.path.join(result_dir, "vllm_dp8_tp1_len*_c*.json"))):
     with open(path, encoding="utf-8") as handle:
@@ -110,7 +122,15 @@ if not records:
 
 records.sort(key=lambda item: item["concurrency"])
 best = max(records, key=lambda item: item["total_token_throughput"])
-summary = {"best": best, "results": records}
+summary = {
+    "benchmark": {
+        "input_length": input_length,
+        "output_length": output_length,
+        "model": model,
+    },
+    "best": best,
+    "results": records,
+}
 summary_path = os.path.join(result_dir, "summary.json")
 with open(summary_path, "w", encoding="utf-8") as handle:
     json.dump(summary, handle, indent=2, sort_keys=True)
@@ -125,3 +145,17 @@ failed = sum(item["failed"] for item in records)
 if failed:
     raise SystemExit(f"Benchmark completed with {failed} failed requests.")
 PY
+
+"$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
+  --project-root "$PROJECT_ROOT" \
+  --run-dir "$RUN_DIR" \
+  --summary "$RESULT_DIR/summary.json" \
+  --input-length "$INPUT_LEN" \
+  --output-length "$OUTPUT_LEN" \
+  --model "$SERVED_MODEL_NAME"
+
+if (( PUBLISH_REPORTS )); then
+  "$SCRIPT_DIR/publish_report.sh"
+else
+  echo "Skipping Git report publication because PUBLISH_REPORTS=0."
+fi

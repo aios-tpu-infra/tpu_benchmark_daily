@@ -4,6 +4,20 @@ This project runs a reproducible Qwen3.5-397B-A17B-FP8 throughput benchmark on
 TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-in
 `models/` directory contains only an offline configuration/tokenizer snapshot.
 
+## Recent benchmark throughput
+
+<!-- BENCHMARK_REPORT_START -->
+[![Recent peak throughput](reports/throughput.svg)](reports/index.html)
+
+Latest successful run: **49,381.83 total tok/s** at concurrency **64** (`20260717T075454Z`).
+
+| Completed (UTC) | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
+|---|---:|---:|---:|---:|
+| 2026-07-17 08:05 | 49,381.83 | 64 | 6.027 | 10,594.9 |
+
+The chart shows successful runs only; see [`reports/latest.json`](reports/latest.json) for the newest peak and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
+<!-- BENCHMARK_REPORT_END -->
+
 ## Layout
 
 - `third_party/torchtpu-vllm/`: Git submodule, refreshed from `origin/main`.
@@ -15,6 +29,7 @@ TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-i
 - `scripts/update_environment.sh`: updates both submodules, builds and installs
   `torch_tpu`, then synchronizes the project `.venv`.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
+- `reports/`: durable peak-throughput history, README chart, and static dashboard.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
@@ -54,6 +69,26 @@ fail safely. `--prepare-only` leaves any running service untouched.
 
 The newly started server is stopped after the benchmark by default. Use
 `--keep-server-running` only for interactive debugging.
+
+After every successful full benchmark, the runner records the highest
+`total_token_throughput`, regenerates the chart and dashboard, then commits
+`README` and `reports/` and pushes that commit directly to `origin/main`. The
+GitHub repository homepage therefore shows the latest curve without a separate
+web service. Set `PUBLISH_REPORTS=0` to disable commit and push for a local-only
+run.
+
+The most recent local peak is available by itself in `reports/latest.json`.
+Open the full local dashboard directly with a browser, or serve it locally:
+
+```bash
+python3 -m http.server 8000 --directory reports
+```
+
+Then visit `http://127.0.0.1:8000/`. Automatic publication uses the repository's
+configured Git SSH credentials. It refuses to run when `main` differs from the
+remote, the index is not empty, or unrelated project files are modified. The
+two source submodule pointers may be modified by their daily updates, but they
+are never included in the generated-report commit.
 
 ## Example crontab
 

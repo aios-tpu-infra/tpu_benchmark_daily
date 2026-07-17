@@ -1,0 +1,2 @@
+run_id,started_at,completed_at,model,input_length,output_length,best_total_token_throughput,best_request_throughput,best_concurrency,mean_ttft_ms,p99_ttft_ms,torchtpu_vllm_revision,torch_tpu_revision,torch_tpu_version,summary_path
+20260717T075454Z,2026-07-17T07:55:09+00:00,2026-07-17T08:05:18+00:00,Qwen3.5-397B-A17B-FP8,8192,1,49381.83103775198,6.027319789790306,64,6295.275573735125,10594.873854666948,88f359b38179a5345514358b7c9738c475e26ea0,40c8169c9903e570d48a22d10957cb1c2ee0bb0c,0.1.1.dev20260714090201+g40c8169c9903,runs/20260717T075454Z/results/summary.json

@@ -41,7 +41,7 @@ if [[ ! -x "$VENV_DIR/bin/vllm" ]]; then
   exit 1
 fi
 if [[ ! -d "$TORCHTPU_DIR/src/vllm_torchtpu" ]]; then
-  echo "ERROR: torchtpu-vllm submodule is missing: $TORCHTPU_DIR" >&2
+  echo "ERROR: vllm-torchtpu submodule is missing: $TORCHTPU_DIR" >&2
   exit 1
 fi
 if [[ ! -f "$TORCH_TPU_DIR/pyproject.toml" ]]; then
@@ -98,7 +98,7 @@ COMPILATION_CONFIG=$(printf \
   "$MAX_NUM_BATCHED_TOKENS")
 
 echo "Starting $SERVED_MODEL_NAME from offline metadata at $MODEL_DIR"
-echo "torchtpu-vllm revision: $SOURCE_REV"
+echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu revision:      $TORCH_TPU_REV"
 echo "load format: dummy"
 

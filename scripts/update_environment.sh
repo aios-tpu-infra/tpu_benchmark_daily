@@ -16,7 +16,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/update_environment.sh [--no-source-update]
 
-Updates torchtpu-vllm and torch_tpu to origin/main, builds a Python 3.12
+Updates vllm-torchtpu and torch_tpu to origin/main, builds a Python 3.12
 torch_tpu wheel locally with Bazel, and synchronizes the project-local .venv.
 
   --no-source-update  Build and install the revisions already checked out.
@@ -94,7 +94,7 @@ if (( UPDATE_SOURCE )); then
   # Check initialized repositories before submodule update so local work is not
   # hidden by a checkout attempt.
   if git -C "$TORCHTPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    ensure_clean "torchtpu-vllm" "$TORCHTPU_DIR"
+    ensure_clean "vllm-torchtpu" "$TORCHTPU_DIR"
   fi
   if git -C "$TORCH_TPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     ensure_clean "torch_tpu" "$TORCH_TPU_DIR"
@@ -104,7 +104,7 @@ if (( UPDATE_SOURCE )); then
     third_party/torchtpu-vllm \
     third_party/torch_tpu
 
-  update_main "torchtpu-vllm" "$TORCHTPU_DIR"
+  update_main "vllm-torchtpu" "$TORCHTPU_DIR"
   update_main "torch_tpu" "$TORCH_TPU_DIR"
 fi
 
@@ -118,7 +118,7 @@ done
 torchtpu_vllm_revision=$(git -C "$TORCHTPU_DIR" rev-parse HEAD)
 torch_tpu_revision=$(git -C "$TORCH_TPU_DIR" rev-parse HEAD)
 torch_tpu_short_revision=${torch_tpu_revision:0:12}
-echo "Using torchtpu-vllm revision: $torchtpu_vllm_revision"
+echo "Using vllm-torchtpu revision: $torchtpu_vllm_revision"
 echo "Using torch_tpu revision:      $torch_tpu_revision"
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -137,7 +137,7 @@ fi
 
 mkdir -p "$STATE_DIR" "$RUNTIME_DIR/wheels" "$BAZEL_OUTPUT_USER_ROOT"
 
-# torchtpu-vllm declares an exact compatible nightly version. Keep that public
+# vllm-torchtpu declares an exact compatible nightly version. Keep that public
 # version so standard dependency checks pass, and add the actual source SHA as
 # a PEP 440 local version. An exact specifier without a local part accepts it.
 compatible_torch_tpu_version=$(
@@ -160,7 +160,7 @@ matches = [
 ]
 if len(matches) != 1:
     raise SystemExit(
-        "expected one exact torch-tpu dependency in torchtpu-vllm pyproject.toml"
+        "expected one exact torch-tpu dependency in vllm-torchtpu pyproject.toml"
     )
 print(matches[0])
 PY
@@ -176,7 +176,7 @@ PY
 )
 if [[ "$compatible_torch_tpu_version" != "$wheel_base_version"* ]] || \
     [[ "$compatible_torch_tpu_version" == *+* ]]; then
-  echo "ERROR: unsupported torchtpu-vllm torch-tpu pin:" >&2
+  echo "ERROR: unsupported vllm-torchtpu torch-tpu pin:" >&2
   echo "  $compatible_torch_tpu_version (source base is $wheel_base_version)" >&2
   exit 1
 fi
@@ -235,7 +235,7 @@ printf 'torch-tpu @ %s\n' "$wheel_uri" > "$override_file"
 export UV_TORCH_BACKEND="${UV_TORCH_BACKEND:-cpu}"
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 
-echo "Installing torchtpu-vllm with the locally built torch_tpu wheel..."
+echo "Installing vllm-torchtpu with the locally built torch_tpu wheel..."
 (
   cd -- "$TORCHTPU_DIR"
   "$UV" pip install \

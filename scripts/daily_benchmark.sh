@@ -41,7 +41,7 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
   --keep-server-running  Keep a successfully benchmarked server alive.
 
 The default full workflow stops an existing vLLM service on PORT, updates
-torchtpu-vllm/main and torch_tpu/main, builds and installs torch_tpu from source,
+vllm-torchtpu/main and torch_tpu/main, builds and installs torch_tpu from source,
 updates .venv, starts the dummy-weight server, waits for /health, runs all
 benchmarks, saves results, and stops it.
 EOF

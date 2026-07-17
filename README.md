@@ -21,7 +21,8 @@ The chart shows successful runs only; see [`reports/latest.json`](reports/latest
 
 ## Layout
 
-- `third_party/torchtpu-vllm/`: Git submodule, refreshed from `origin/main`.
+- `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
+  refreshed from `origin/main` (the local path is retained for compatibility).
 - `third_party/torch_tpu/`: Git submodule, refreshed from `origin/main` and
   built locally with Bazel.
 - `models/`: offline model metadata; no checkpoint weights.
@@ -41,7 +42,7 @@ first build also needs network access to the public Bazel, PyPI, and PyTorch CPU
 package sources.
 
 No Google Artifact Registry credential is required: the private `torch-tpu`
-package source declared by `torchtpu-vllm` is overridden with the wheel built
+package source declared by `vllm-torchtpu` is overridden with the wheel built
 from `third_party/torch_tpu`.
 
 Run:
@@ -54,7 +55,7 @@ Each invocation fetches the latest `main` revision of both source projects,
 runs the official Python 3.12 wheel target with `--config=no_rbe`, and reinstalls
 that local wheel. Bazel reuses its incremental cache from `.runtime/bazel/`;
 built wheels are retained under `.runtime/wheels/`. The wheel keeps the
-compatibility version pinned by `torchtpu-vllm` and appends `+g<source SHA>` so
+compatibility version pinned by `vllm-torchtpu` and appends `+g<source SHA>` so
 the installed package remains both dependency-compatible and traceable.
 
 ## Manual full run

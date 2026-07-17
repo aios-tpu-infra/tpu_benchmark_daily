@@ -9,10 +9,11 @@ TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-i
 <!-- BENCHMARK_REPORT_START -->
 [![Recent peak throughput](reports/throughput.svg)](reports/index.html)
 
-Latest successful run: **49,381.83 total tok/s** at concurrency **64** (`20260717T075454Z`).
+Latest successful run: **49,372.29 total tok/s** at concurrency **64** (`20260717T085135Z`).
 
 | Completed (UTC) | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
 |---|---:|---:|---:|---:|
+| 2026-07-17 08:58 | 49,372.29 | 64 | 6.026 | 10,591.7 |
 | 2026-07-17 08:05 | 49,381.83 | 64 | 6.027 | 10,594.9 |
 
 The chart shows successful runs only; see [`reports/latest.json`](reports/latest.json) for the newest peak and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.

@@ -597,7 +597,7 @@ def main() -> None:
     csv_path = reports_dir / "throughput_history.csv"
     svg_path = reports_dir / "throughput.svg"
     html_path = reports_dir / "index.html"
-    readme_path = project_root / "README"
+    readme_path = project_root / "README.md"
     lock_path = project_root / ".state" / "benchmark_report.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 

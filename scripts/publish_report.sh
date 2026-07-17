@@ -55,13 +55,13 @@ fi
 unexpected_changes=$(git -C "$PROJECT_ROOT" status --porcelain=v1 \
   --untracked-files=all -- \
   . \
-  ':(exclude)README' \
+  ':(exclude)README.md' \
   ':(exclude)reports' \
   ':(exclude)reports/**' \
   ':(exclude)third_party/torch_tpu' \
   ':(exclude)third_party/torchtpu-vllm')
 if [[ -n "$unexpected_changes" ]]; then
-  echo "ERROR: the worktree contains changes outside README/reports and the two submodules:" >&2
+  echo "ERROR: the worktree contains changes outside README.md/reports and the two submodules:" >&2
   printf '%s\n' "$unexpected_changes" >&2
   echo "Refusing to create an unattended commit." >&2
   exit 1
@@ -98,14 +98,14 @@ fi
 run_id=${report_metadata[0]}
 throughput=${report_metadata[1]}
 
-git -C "$PROJECT_ROOT" add -A -- README reports
+git -C "$PROJECT_ROOT" add -A -- README.md reports
 
 while IFS= read -r -d '' staged_path; do
   case "$staged_path" in
-    README|reports/*) ;;
+    README.md|reports/*) ;;
     *)
       echo "ERROR: refusing to commit unexpected staged path: $staged_path" >&2
-      git -C "$PROJECT_ROOT" restore --staged -- README reports
+      git -C "$PROJECT_ROOT" restore --staged -- README.md reports
       exit 1
       ;;
   esac

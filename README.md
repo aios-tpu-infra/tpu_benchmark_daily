@@ -72,7 +72,7 @@ The newly started server is stopped after the benchmark by default. Use
 
 After every successful full benchmark, the runner records the highest
 `total_token_throughput`, regenerates the chart and dashboard, then commits
-`README` and `reports/` and pushes that commit directly to `origin/main`. The
+`README.md` and `reports/` and pushes that commit directly to `origin/main`. The
 GitHub repository homepage therefore shows the latest curve without a separate
 web service. Set `PUBLISH_REPORTS=0` to disable commit and push for a local-only
 run.

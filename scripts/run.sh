@@ -65,6 +65,11 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 export SKIP_JAX_PRECOMPILE=1
+# TorchTPU's split compiler artifact is not currently serializable. Disable
+# both vLLM's compile cache and PyTorch's AOTAutograd cache until upstream can
+# persist _SplitCompiledExecutable safely.
+export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
+export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
 export RAY_memory_monitor_refresh_ms=0
 export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=0
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1

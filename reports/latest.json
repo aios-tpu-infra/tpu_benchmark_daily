@@ -1,15 +1,15 @@
 {
-  "completed_at": "2026-07-18T00:01:49+00:00",
+  "completed_at": "2026-07-18T18:17:24+00:00",
   "concurrency": 64,
   "input_length": 8192,
-  "mean_ttft_ms": 6999.24348013883,
+  "mean_ttft_ms": 6984.199464359449,
   "model": "Qwen3.5-397B-A17B-FP8",
   "output_length": 1,
-  "p99_ttft_ms": 11793.570943670347,
-  "request_throughput": 5.415756387664894,
-  "run_id": "20260717T234449Z",
+  "p99_ttft_ms": 11780.618357319909,
+  "request_throughput": 5.419007080681459,
+  "run_id": "20260718T180001Z",
   "torch_tpu_revision": "6e5b6873c340deb1c5a385fc60e2838bb3e01b8f",
   "torch_tpu_version": "0.1.1.dev20260714090201+g6e5b6873c340",
-  "torchtpu_vllm_revision": "2838d74ab88097d3fed4ecb3ad5de592f9e3618a",
-  "total_token_throughput": 44371.29208413848
+  "torchtpu_vllm_revision": "d296ce153cdd23498edf6e34a391828ac38e7b2e",
+  "total_token_throughput": 44397.925012023195
 }

@@ -1,16 +1,16 @@
 {
-  "completed_at": "2026-07-20T18:16:52+00:00",
+  "completed_at": "2026-07-21T18:39:19+00:00",
   "concurrency": 64,
   "input_length": 8192,
   "machine_ip": "10.42.4.22",
-  "mean_ttft_ms": 7096.706042719006,
+  "mean_ttft_ms": 7104.1095279529145,
   "model": "Qwen3.5-397B-A17B-FP8",
   "output_length": 1,
-  "p99_ttft_ms": 11976.010046949814,
-  "request_throughput": 5.33267151146483,
-  "run_id": "20260720T180001Z",
-  "torch_tpu_revision": "f62064452a22f17e30cf235353140abf1e7bc559",
-  "torch_tpu_version": "0.1.1.dev20260714090201+gf62064452a22",
-  "torchtpu_vllm_revision": "a2bdc585f7f89ae1b474cc578b1ff1532f10ba4a",
-  "total_token_throughput": 43690.577693431354
+  "p99_ttft_ms": 12381.169070350586,
+  "request_throughput": 4.928406000140624,
+  "run_id": "20260721T180001Z",
+  "torch_tpu_revision": "7efd13ccd37f2e5517702dc1339a1e3ad9a7f92e",
+  "torch_tpu_version": "0.1.1.dev20260714090201+g7efd13ccd37f",
+  "torchtpu_vllm_revision": "db0149493e41c053f0f9c9a68ee42b32032dcbd4",
+  "total_token_throughput": 40378.43035915213
 }

@@ -10,7 +10,7 @@ TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 TORCH_TPU_DIR="${TORCH_TPU_DIR:-$PROJECT_ROOT/third_party/torch_tpu}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
-SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-1800}"
+SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 MACHINE_IP="${MACHINE_IP:-}"
@@ -89,9 +89,9 @@ detect_machine_ip() {
       ip -4 route get 1.1.1.1 2>/dev/null |
         awk '
           {
-            for (index = 1; index <= NF; index++) {
-              if ($index == "src") {
-                print $(index + 1)
+            for (field = 1; field <= NF; field++) {
+              if ($field == "src") {
+                print $(field + 1)
                 exit
               }
             }
@@ -462,6 +462,19 @@ if (( ! ready )); then
   exit 1
 fi
 echo "Server is healthy on port $PORT."
+
+"$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
+  --base-url "http://127.0.0.1:$PORT" \
+  --model Qwen3.5-397B-A17B-FP8 \
+  --output-dir "$RUN_DIR/results/decode_sliding_window" \
+  --concurrency 16 \
+  --prefill-tokens 65536 \
+  --decode-tokens 1024 \
+  --tokenizer-dir "$MODEL_DIR" \
+  --rounds 3 \
+  --window-seconds 10 \
+  --step-seconds 1 \
+  2>&1 | tee "$RUN_DIR/decode_benchmark.log"
 
 "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR" 2>&1 | tee "$RUN_DIR/benchmark.log"
 

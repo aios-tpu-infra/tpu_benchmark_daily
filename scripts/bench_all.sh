@@ -131,6 +131,12 @@ summary = {
     "best": best,
     "results": records,
 }
+decode_summary_path = os.path.join(
+    result_dir, "decode_sliding_window", "summary.json"
+)
+if os.path.isfile(decode_summary_path):
+    with open(decode_summary_path, encoding="utf-8") as handle:
+        summary["decode_sliding_window"] = json.load(handle)
 summary_path = os.path.join(result_dir, "summary.json")
 with open(summary_path, "w", encoding="utf-8") as handle:
     json.dump(summary, handle, indent=2, sort_keys=True)

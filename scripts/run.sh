@@ -12,9 +12,10 @@ MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-66560}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+COMPILE_SIZES="${COMPILE_SIZES:-2,4,8,16,$MAX_NUM_BATCHED_TOKENS}"
 
 require_uint() {
   local name=$1
@@ -55,7 +56,8 @@ fi
 
 SOURCE_REV=$(git -C "$TORCHTPU_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 TORCH_TPU_REV=$(git -C "$TORCH_TPU_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
-CACHE_KEY="${SOURCE_REV}_${TORCH_TPU_REV}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}"
+COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
+CACHE_KEY="${SOURCE_REV}_${TORCH_TPU_REV}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_cs${COMPILE_SIZES_CACHE_KEY}"
 
 export PJRT_DEVICE=TPU
 export VLLM_TARGET_DEVICE=tpu
@@ -100,12 +102,13 @@ fi
 
 COMPILATION_CONFIG=$(printf \
   '{"backend":"vllm_torchtpu.compilation.tpu_compiler.TpuCompilerAdaptor","compile_sizes":[%s],"inductor_compile_config":{"enable_auto_functionalized_v2":false,"size_asserts":false,"alignment_asserts":false,"scalar_asserts":false}}' \
-  "$MAX_NUM_BATCHED_TOKENS")
+  "$COMPILE_SIZES")
 
 echo "Starting $SERVED_MODEL_NAME from offline metadata at $MODEL_DIR"
 echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu revision:      $TORCH_TPU_REV"
 echo "load format: dummy"
+echo "compile sizes: $COMPILE_SIZES"
 
 exec "$VENV_DIR/bin/python" \
   -m vllm.entrypoints.openai.api_server \

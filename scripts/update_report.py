@@ -8,10 +8,12 @@ import argparse
 import csv
 import fcntl
 import html
+import ipaddress
 import io
 import json
 import math
 import os
+import socket
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,6 +27,7 @@ CSV_FIELDS = (
     "run_id",
     "started_at",
     "completed_at",
+    "machine_ip",
     "model",
     "input_length",
     "output_length",
@@ -93,6 +96,34 @@ def positive_int(value: Any, field: str) -> int:
     if result <= 0:
         raise ValueError(f"{field} must be positive, got {value!r}")
     return result
+
+
+def normalized_ip_address(value: Any, field: str = "machine_ip") -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return str(ipaddress.ip_address(str(value)))
+    except ValueError as error:
+        message = f"{field} must be a valid IP address, got {value!r}"
+        raise ValueError(message) from error
+
+
+def detect_machine_ip() -> str:
+    configured = os.environ.get("MACHINE_IP")
+    if configured:
+        return normalized_ip_address(configured, "MACHINE_IP")
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as connection:
+            connection.connect(("1.1.1.1", 9))
+            return normalized_ip_address(connection.getsockname()[0])
+    except OSError:
+        try:
+            return normalized_ip_address(socket.gethostbyname(socket.gethostname()))
+        except OSError as error:
+            raise ValueError(
+                "could not determine the machine IP; set MACHINE_IP explicitly"
+            ) from error
 
 
 def iso_utc(value: datetime) -> str:
@@ -179,7 +210,21 @@ def build_record(
     output_length = positive_int(output_length, "output_length")
 
     metadata_path = run_dir / "run_metadata.json"
-    metadata = load_json(metadata_path) if metadata_path.is_file() else {}
+    metadata_exists = metadata_path.is_file()
+    metadata = load_json(metadata_path) if metadata_exists else {}
+    configured_machine_ip = os.environ.get("MACHINE_IP")
+    if configured_machine_ip:
+        machine_ip = normalized_ip_address(configured_machine_ip, "MACHINE_IP")
+    elif "machine_ip" in metadata:
+        machine_ip = normalized_ip_address(metadata["machine_ip"])
+    elif metadata_exists:
+        # Legacy run metadata predates machine IP capture. Do not guess which
+        # machine produced an existing historical result.
+        machine_ip = ""
+    else:
+        # Manual bench_all.sh runs do not create run_metadata.json, so capture
+        # the address while the report for that run is being recorded.
+        machine_ip = detect_machine_ip()
     run_id = run_dir.name
     started_at = metadata.get("started_at") or run_id_timestamp(run_id)
     if not isinstance(started_at, str):
@@ -210,6 +255,7 @@ def build_record(
         "run_id": run_id,
         "started_at": started_at,
         "completed_at": completed_at,
+        "machine_ip": machine_ip,
         "model": str(model),
         "input_length": input_length,
         "output_length": output_length,
@@ -241,6 +287,10 @@ def load_history(path: Path) -> list[dict[str, Any]]:
     runs = history.get("runs")
     if not isinstance(runs, list):
         raise ValueError(f"history runs must be a list in {path}")
+    for index, run in enumerate(runs):
+        if not isinstance(run, dict):
+            raise ValueError(f"history run {index} must be an object in {path}")
+        run["machine_ip"] = normalized_ip_address(run.get("machine_ip"))
     return runs
 
 
@@ -248,7 +298,11 @@ def update_history(
     runs: list[dict[str, Any]], record: dict[str, Any]
 ) -> list[dict[str, Any]]:
     by_run_id = {str(item["run_id"]): item for item in runs}
-    by_run_id[str(record["run_id"])] = record
+    run_id = str(record["run_id"])
+    existing = by_run_id.get(run_id)
+    if not record.get("machine_ip") and existing and existing.get("machine_ip"):
+        record = {**record, "machine_ip": existing["machine_ip"]}
+    by_run_id[run_id] = record
     return sorted(
         by_run_id.values(), key=lambda item: (item["completed_at"], item["run_id"])
     )
@@ -418,6 +472,7 @@ def render_latest_json(run: dict[str, Any]) -> str:
     payload = {
         "run_id": run["run_id"],
         "completed_at": run["completed_at"],
+        "machine_ip": run["machine_ip"],
         "model": run["model"],
         "input_length": run["input_length"],
         "output_length": run["output_length"],

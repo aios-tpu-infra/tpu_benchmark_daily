@@ -2,6 +2,7 @@
   "completed_at": "2026-07-20T18:16:52+00:00",
   "concurrency": 64,
   "input_length": 8192,
+  "machine_ip": "10.42.4.22",
   "mean_ttft_ms": 7096.706042719006,
   "model": "Qwen3.5-397B-A17B-FP8",
   "output_length": 1,

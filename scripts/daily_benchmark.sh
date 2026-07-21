@@ -13,6 +13,7 @@ PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-1800}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
+MACHINE_IP="${MACHINE_IP:-}"
 PREPARE_ONLY=0
 
 mkdir -p "$STATE_DIR" "$PROJECT_ROOT/runs"
@@ -79,6 +80,57 @@ if [[ "$KEEP_SERVER_RUNNING" != 0 && "$KEEP_SERVER_RUNNING" != 1 ]]; then
   echo "ERROR: KEEP_SERVER_RUNNING must be 0 or 1." >&2
   exit 2
 fi
+
+detect_machine_ip() {
+  local candidate
+
+  if command -v ip >/dev/null 2>&1; then
+    candidate=$(
+      ip -4 route get 1.1.1.1 2>/dev/null |
+        awk '
+          {
+            for (index = 1; index <= NF; index++) {
+              if ($index == "src") {
+                print $(index + 1)
+                exit
+              }
+            }
+          }
+        '
+    )
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  fi
+
+  if command -v hostname >/dev/null 2>&1; then
+    candidate=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  fi
+
+  return 1
+}
+
+if [[ -z "$MACHINE_IP" ]]; then
+  MACHINE_IP=$(detect_machine_ip) || {
+    echo "ERROR: could not determine the machine IP address." >&2
+    echo "Set MACHINE_IP explicitly before running the benchmark." >&2
+    exit 1
+  }
+fi
+python3.12 - "$MACHINE_IP" <<'PY'
+import ipaddress
+import sys
+
+try:
+    ipaddress.ip_address(sys.argv[1])
+except ValueError as error:
+    raise SystemExit(f"ERROR: MACHINE_IP is not a valid IP address: {error}")
+PY
 
 list_port_listener_pids() {
   if command -v lsof >/dev/null 2>&1; then
@@ -283,6 +335,7 @@ exec > >(tee -a "$RUN_DIR/job.log") 2>&1
 echo "Daily TPU benchmark started at $(date -u --iso-8601=seconds)"
 echo "Project root: $PROJECT_ROOT"
 echo "Run directory: $RUN_DIR"
+echo "Machine IP: $MACHINE_IP"
 
 if (( ! PREPARE_ONLY )); then
   stop_existing_server
@@ -323,6 +376,7 @@ PY
 cat > "$RUN_DIR/run_metadata.json" <<EOF
 {
   "started_at": "$(date -u --iso-8601=seconds)",
+  "machine_ip": "$MACHINE_IP",
   "torchtpu_vllm_revision": "$source_revision",
   "torch_tpu_revision": "$torch_tpu_revision",
   "torch_tpu_version": "$torch_tpu_version",

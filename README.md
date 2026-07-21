@@ -107,5 +107,6 @@ Run every day at 02:00 UTC:
 
 The runner uses absolute project paths internally, takes an exclusive `flock`,
 and writes all output beneath `runs/<UTC timestamp>/`. The exact revisions of
-both subprojects and the locally built wheel version are saved in each run's
-`run_metadata.json`.
+both subprojects, the locally built wheel version, and the machine IP are saved
+in each run's `run_metadata.json`. Set `MACHINE_IP` to override automatic
+primary-address detection when the machine has multiple network interfaces.

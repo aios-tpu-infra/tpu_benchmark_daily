@@ -57,6 +57,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6295.275573735125,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -125,6 +126,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6292.118382436456,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -193,6 +195,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6310.011965862941,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -261,6 +264,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6999.24348013883,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -329,6 +333,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6984.199464359449,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -397,6 +402,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6981.610803406234,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
@@ -465,6 +471,7 @@
         }
       ],
       "input_length": 8192,
+      "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 7096.706042719006,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,

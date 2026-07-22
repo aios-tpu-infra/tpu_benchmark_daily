@@ -9,21 +9,23 @@ TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-i
 <!-- BENCHMARK_REPORT_START -->
 [![Recent peak throughput](reports/throughput.svg)](reports/index.html)
 
-Latest successful run: **46,240.26 total tok/s** at concurrency **16** (`20260722T014057Z`).
+Latest successful DP8: **46,240.26 total tok/s** at concurrency **16** (`20260722T014057Z`).
+Latest successful PCP8: **34,296.71 total tok/s** at concurrency **16** (`manual-pcp8-bench-20260722T050712Z`).
 
-| Completed (UTC) | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
-|---|---:|---:|---:|---:|
-| 2026-07-22 02:28 | 46,240.26 | 16 | 5.644 | 3,738.4 |
-| 2026-07-21 18:39 | 40,378.43 | 64 | 4.928 | 12,381.2 |
-| 2026-07-20 18:16 | 43,690.58 | 64 | 5.333 | 11,976.0 |
-| 2026-07-19 18:16 | 44,436.44 | 64 | 5.424 | 11,778.4 |
-| 2026-07-18 18:17 | 44,397.93 | 64 | 5.419 | 11,780.6 |
-| 2026-07-18 00:01 | 44,371.29 | 64 | 5.416 | 11,793.6 |
-| 2026-07-17 09:18 | 49,360.61 | 64 | 6.025 | 10,597.1 |
-| 2026-07-17 08:58 | 49,372.29 | 64 | 6.026 | 10,591.7 |
-| 2026-07-17 08:05 | 49,381.83 | 64 | 6.027 | 10,594.9 |
+| Completed (UTC) | Config | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
+|---|---|---:|---:|---:|---:|
+| 2026-07-22 05:17 | PCP8 | 34,296.71 | 16 | 4.186 | 4,883.4 |
+| 2026-07-22 02:28 | DP8 | 46,240.26 | 16 | 5.644 | 3,738.4 |
+| 2026-07-21 18:39 | DP8 | 40,378.43 | 64 | 4.928 | 12,381.2 |
+| 2026-07-20 18:16 | DP8 | 43,690.58 | 64 | 5.333 | 11,976.0 |
+| 2026-07-19 18:16 | DP8 | 44,436.44 | 64 | 5.424 | 11,778.4 |
+| 2026-07-18 18:17 | DP8 | 44,397.93 | 64 | 5.419 | 11,780.6 |
+| 2026-07-18 00:01 | DP8 | 44,371.29 | 64 | 5.416 | 11,793.6 |
+| 2026-07-17 09:18 | DP8 | 49,360.61 | 64 | 6.025 | 10,597.1 |
+| 2026-07-17 08:58 | DP8 | 49,372.29 | 64 | 6.026 | 10,591.7 |
+| 2026-07-17 08:05 | DP8 | 49,381.83 | 64 | 6.027 | 10,594.9 |
 
-The chart shows successful runs only; see [`reports/latest.json`](reports/latest.json) for the newest peak and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
+The chart compares the latest successful DP8 and PCP8 throughput across concurrency levels; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
 
 ## Layout
@@ -31,8 +33,10 @@ The chart shows successful runs only; see [`reports/latest.json`](reports/latest
 - `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
   refreshed from `origin/main` (the local path is retained for compatibility).
 - `models/`: offline model metadata; no checkpoint weights.
-- `scripts/run.sh`: starts the vLLM server with `--load-format dummy`.
-- `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64.
+- `scripts/start_dp_server.sh`: starts the DP8/PCP1 vLLM server with dummy weights.
+- `scripts/start_pcp_server.sh`: starts the DP1/PCP8 vLLM server with dummy weights.
+- `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64 for
+  the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
@@ -82,17 +86,19 @@ server listening on `PORT` (18100 by default), including its worker process
 group. A non-vLLM process on that port is never killed and causes the job to
 fail safely. `--prepare-only` leaves any running service untouched.
 
-The newly started server is stopped after the benchmark by default. Use
-`--keep-server-running` only for interactive debugging.
+The runner first starts DP8 and executes the decode and prefill suites, stops
+that server, then repeats both suites with PCP8. Servers are stopped after the
+benchmark by default. Use `--keep-server-running` only for interactive
+debugging; when successful, it keeps the final PCP8 server alive.
 
 After every successful full benchmark, the runner records the highest
-`total_token_throughput`, regenerates the chart and dashboard, then commits
-`README.md` and `reports/` and pushes that commit directly to `origin/main`. The
-GitHub repository homepage therefore shows the latest curve without a separate
-web service. Set `PUBLISH_REPORTS=0` to disable commit and push for a local-only
-run.
+`total_token_throughput` separately for DP8 and PCP8, regenerates the two-series
+chart and dashboard, then commits `README.md` and `reports/` once and pushes that
+commit directly to `origin/main`. The GitHub repository homepage therefore
+shows both curves without a separate web service. Set `PUBLISH_REPORTS=0` to
+disable commit and push for a local-only run.
 
-The most recent local peak is available by itself in `reports/latest.json`.
+The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
 Open the full local dashboard directly with a browser, or serve it locally:
 
 ```bash

@@ -1,0 +1,143 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+import xml.etree.ElementTree as ET
+
+
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "update_report.py"
+SPEC = importlib.util.spec_from_file_location("update_report", SCRIPT_PATH)
+assert SPEC is not None and SPEC.loader is not None
+REPORT = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = REPORT
+SPEC.loader.exec_module(REPORT)
+
+
+def make_run(
+    config: str,
+    *,
+    run_id: str = "20260722T180001Z",
+    completed_at: str = "2026-07-22T18:20:00+00:00",
+    throughput: float = 40_000.0,
+) -> dict[str, object]:
+    return {
+        "run_id": run_id,
+        "benchmark_config": config,
+        "started_at": "2026-07-22T18:00:01+00:00",
+        "completed_at": completed_at,
+        "machine_ip": "10.42.4.22",
+        "model": "test-model",
+        "input_length": 8192,
+        "output_length": 1,
+        "best_total_token_throughput": throughput,
+        "best_request_throughput": 4.0,
+        "best_concurrency": 2,
+        "mean_ttft_ms": 100.0,
+        "p99_ttft_ms": 200.0,
+        "torchtpu_vllm_revision": "abc123",
+        "torch_tpu_revision": "",
+        "torch_tpu_version": "1.0",
+        "summary_path": f"runs/{run_id}/results/{config}/summary.json",
+        "concurrency_results": [
+            {
+                "concurrency": 1,
+                "total_token_throughput": throughput / 2,
+                "request_throughput": 2.0,
+                "mean_ttft_ms": 80.0,
+                "p99_ttft_ms": 160.0,
+            },
+            {
+                "concurrency": 2,
+                "total_token_throughput": throughput,
+                "request_throughput": 4.0,
+                "mean_ttft_ms": 100.0,
+                "p99_ttft_ms": 200.0,
+            },
+        ],
+    }
+
+
+class HistoryMigrationTest(unittest.TestCase):
+    def test_schema_one_history_is_migrated_to_dp_and_pcp_configs(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "runs": [
+                {"run_id": "20260721T180001Z"},
+                {
+                    "run_id": "manual-pcp8-bench-20260722T050712Z",
+                    "summary_path": "runs/manual-pcp/results/summary.json",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "history.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            runs = REPORT.load_history(path)
+
+        self.assertEqual(
+            [run["benchmark_config"] for run in runs], ["dp8", "pcp8"]
+        )
+
+    def test_same_run_id_keeps_both_benchmark_configs(self) -> None:
+        dp_run = make_run("dp8")
+        pcp_run = make_run(
+            "pcp8",
+            completed_at="2026-07-22T18:40:00+00:00",
+            throughput=35_000.0,
+        )
+
+        runs = REPORT.update_history([], dp_run)
+        runs = REPORT.update_history(runs, pcp_run)
+
+        self.assertEqual(len(runs), 2)
+        self.assertEqual(
+            {(run["run_id"], run["benchmark_config"]) for run in runs},
+            {("20260722T180001Z", "dp8"), ("20260722T180001Z", "pcp8")},
+        )
+
+
+class DualSeriesReportTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.runs = [
+            make_run("dp8", throughput=40_000.0),
+            make_run(
+                "pcp8",
+                completed_at="2026-07-22T18:40:00+00:00",
+                throughput=35_000.0,
+            ),
+        ]
+
+    def test_concurrency_chart_contains_two_curves(self) -> None:
+        latest = REPORT.latest_runs_by_config(self.runs)
+        series, labels = REPORT.concurrency_chart_data(latest)
+
+        svg = REPORT.chart_svg(
+            series,
+            labels,
+            title="Latest DP8 vs PCP8 throughput by concurrency",
+        )
+        root = ET.fromstring(svg)
+        polylines = root.findall("{http://www.w3.org/2000/svg}polyline")
+
+        self.assertEqual(len(polylines), 2)
+        self.assertIn("DP8", svg)
+        self.assertIn("PCP8", svg)
+        self.assertIn("#1570ef", svg)
+        self.assertIn("#7a5af8", svg)
+
+    def test_latest_json_contains_both_configs(self) -> None:
+        payload = json.loads(REPORT.render_latest_json(self.runs))
+
+        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(set(payload["benchmarks"]), {"dp8", "pcp8"})
+        self.assertEqual(
+            payload["benchmarks"]["pcp8"]["total_token_throughput"], 35_000.0
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

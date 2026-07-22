@@ -105,6 +105,8 @@ COMPILATION_CONFIG=$(printf \
 echo "Starting $SERVED_MODEL_NAME from offline metadata at $MODEL_DIR"
 echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu version:       $TORCH_TPU_VERSION"
+echo "benchmark config:        dp8"
+echo "parallelism:             DP=8, PCP=1, TP=1"
 echo "load format: dummy"
 echo "compile sizes: $COMPILE_SIZES"
 

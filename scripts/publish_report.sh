@@ -85,9 +85,17 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as file:
     latest = json.load(file)
-run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(latest["run_id"]))
+benchmarks = latest.get("benchmarks")
+if not isinstance(benchmarks, dict) or not benchmarks:
+    raise SystemExit("latest.json does not contain benchmark results")
+newest = max(benchmarks.values(), key=lambda item: item["completed_at"])
+run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(newest["run_id"]))
+summary = ", ".join(
+    f'{config.upper()} {float(result["total_token_throughput"]):.2f}'
+    for config, result in sorted(benchmarks.items())
+)
 print(run_id)
-print(f'{float(latest["total_token_throughput"]):.2f}')
+print(summary)
 PY
 )
 if (( ${#report_metadata[@]} != 2 )); then
@@ -95,7 +103,7 @@ if (( ${#report_metadata[@]} != 2 )); then
   exit 1
 fi
 run_id=${report_metadata[0]}
-throughput=${report_metadata[1]}
+throughput_summary=${report_metadata[1]}
 
 git -C "$PROJECT_ROOT" add -A -- README.md reports
 
@@ -115,7 +123,7 @@ if git -C "$PROJECT_ROOT" diff --cached --quiet; then
   exit 0
 fi
 
-commit_message="Update benchmark report: $run_id ($throughput tok/s)"
+commit_message="Update benchmark report: $run_id ($throughput_summary tok/s)"
 git -C "$PROJECT_ROOT" commit --no-gpg-sign -m "$commit_message"
 if ! git -C "$PROJECT_ROOT" push "$REPORT_REMOTE" "HEAD:refs/heads/$REPORT_BRANCH"; then
   echo "ERROR: report commit was created locally but could not be pushed." >&2

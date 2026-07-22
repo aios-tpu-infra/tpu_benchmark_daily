@@ -1,16 +1,40 @@
 {
-  "completed_at": "2026-07-22T02:28:20+00:00",
-  "concurrency": 16,
-  "input_length": 8192,
-  "machine_ip": "10.42.4.22",
-  "mean_ttft_ms": 2731.707107438069,
-  "model": "Qwen3.5-397B-A17B-FP8",
-  "output_length": 1,
-  "p99_ttft_ms": 3738.3512260811403,
-  "request_throughput": 5.643873472220163,
-  "run_id": "20260722T014057Z",
-  "torch_tpu_revision": "1e9983ca702ddec06733b66eee6aac60163d58d0",
-  "torch_tpu_version": "0.1.1.dev20260714090201+g1e9983ca702d",
-  "torchtpu_vllm_revision": "db5ae0ab3941792f4661153aca13b2ca5a8e47b0",
-  "total_token_throughput": 46240.25535789979
+  "benchmarks": {
+    "dp8": {
+      "benchmark_config": "dp8",
+      "completed_at": "2026-07-22T02:28:20+00:00",
+      "concurrency": 16,
+      "input_length": 8192,
+      "machine_ip": "10.42.4.22",
+      "mean_ttft_ms": 2731.707107438069,
+      "model": "Qwen3.5-397B-A17B-FP8",
+      "output_length": 1,
+      "p99_ttft_ms": 3738.3512260811403,
+      "request_throughput": 5.643873472220163,
+      "run_id": "20260722T014057Z",
+      "torch_tpu_revision": "1e9983ca702ddec06733b66eee6aac60163d58d0",
+      "torch_tpu_version": "0.1.1.dev20260714090201+g1e9983ca702d",
+      "torchtpu_vllm_revision": "db5ae0ab3941792f4661153aca13b2ca5a8e47b0",
+      "total_token_throughput": 46240.25535789979
+    },
+    "pcp8": {
+      "benchmark_config": "pcp8",
+      "completed_at": "2026-07-22T05:17:04+00:00",
+      "concurrency": 16,
+      "input_length": 8192,
+      "machine_ip": "10.42.4.22",
+      "mean_ttft_ms": 3615.183541905026,
+      "model": "Qwen3.5-397B-A17B-FP8",
+      "output_length": 1,
+      "p99_ttft_ms": 4883.395742683788,
+      "request_throughput": 4.186098824387201,
+      "run_id": "manual-pcp8-bench-20260722T050712Z",
+      "torch_tpu_revision": "",
+      "torch_tpu_version": "0.1.1.dev20260714090201",
+      "torchtpu_vllm_revision": "db5ae0ab3941792f4661153aca13b2ca5a8e47b0",
+      "total_token_throughput": 34296.70766820434
+    }
+  },
+  "schema_version": 2,
+  "updated_at": "2026-07-22T05:17:04+00:00"
 }

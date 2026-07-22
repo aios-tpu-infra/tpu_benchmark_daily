@@ -12,6 +12,7 @@ HOST="${BENCH_HOST:-127.0.0.1}"
 PORT="${PORT:-18100}"
 INPUT_LEN="${INPUT_LEN:-8192}"
 OUTPUT_LEN="${OUTPUT_LEN:-1}"
+BENCHMARK_CONFIG="${BENCHMARK_CONFIG:-dp8}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 
 RUN_DIR="${1:-}"
@@ -23,7 +24,13 @@ if [[ -z "$RUN_DIR" ]]; then
 fi
 mkdir -p "$RUN_DIR"
 RUN_DIR=$(cd -- "$RUN_DIR" && pwd)
-RESULT_DIR="$RUN_DIR/results"
+if [[ ! "$BENCHMARK_CONFIG" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
+  echo "ERROR: invalid BENCHMARK_CONFIG '$BENCHMARK_CONFIG'." >&2
+  exit 2
+fi
+
+RESULT_PREFIX="vllm_${BENCHMARK_CONFIG}_tp1_len${INPUT_LEN}"
+RESULT_DIR="$RUN_DIR/results/$BENCHMARK_CONFIG"
 mkdir -p "$RESULT_DIR"
 
 if [[ ! -x "$VENV_DIR/bin/vllm" ]]; then
@@ -60,7 +67,7 @@ for concurrency in "${concurrencies[@]}"; do
   echo "Running benchmark for concurrency: $concurrency"
   echo "====================================================================="
 
-  result_filename="vllm_dp8_tp1_len${INPUT_LEN}_c${concurrency}.json"
+  result_filename="${RESULT_PREFIX}_c${concurrency}.json"
   "$VENV_DIR/bin/vllm" bench serve \
     --backend openai \
     --host "$HOST" \
@@ -84,7 +91,7 @@ for concurrency in "${concurrencies[@]}"; do
     --save-detailed \
     --result-dir "$RESULT_DIR" \
     --result-filename "$result_filename" \
-    --label "vllm_dp8_tp1_len${INPUT_LEN}_c${concurrency}" \
+    --label "${RESULT_PREFIX}_c${concurrency}" \
     "$@"
 done
 
@@ -92,7 +99,9 @@ done
   "$RESULT_DIR" \
   "$INPUT_LEN" \
   "$OUTPUT_LEN" \
-  "$SERVED_MODEL_NAME" <<'PY'
+  "$SERVED_MODEL_NAME" \
+  "$BENCHMARK_CONFIG" \
+  "$RESULT_PREFIX" <<'PY'
 import glob
 import json
 import os
@@ -102,8 +111,10 @@ result_dir = sys.argv[1]
 input_length = int(sys.argv[2])
 output_length = int(sys.argv[3])
 model = sys.argv[4]
+benchmark_config = sys.argv[5]
+result_prefix = sys.argv[6]
 records = []
-for path in sorted(glob.glob(os.path.join(result_dir, "vllm_dp8_tp1_len*_c*.json"))):
+for path in sorted(glob.glob(os.path.join(result_dir, f"{result_prefix}_c*.json"))):
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     records.append({
@@ -127,6 +138,7 @@ summary = {
         "input_length": input_length,
         "output_length": output_length,
         "model": model,
+        "benchmark_config": benchmark_config,
     },
     "best": best,
     "results": records,
@@ -156,6 +168,7 @@ PY
   --project-root "$PROJECT_ROOT" \
   --run-dir "$RUN_DIR" \
   --summary "$RESULT_DIR/summary.json" \
+  --benchmark-config "$BENCHMARK_CONFIG" \
   --input-length "$INPUT_LEN" \
   --output-length "$OUTPUT_LEN" \
   --model "$SERVED_MODEL_NAME"

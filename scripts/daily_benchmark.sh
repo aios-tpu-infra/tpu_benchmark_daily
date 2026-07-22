@@ -12,6 +12,7 @@ PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
+PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
 PREPARE_ONLY=0
 
@@ -42,8 +43,9 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
 
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
-.venv, starts the dummy-weight server, waits for /health, runs all benchmarks,
-saves results, and stops it.
+.venv, then benchmarks DP8 and PCP8 servers in sequence. Both configurations
+run the decode and prefill suites. Reports are generated after each suite and
+published once after both configurations succeed.
 EOF
 }
 
@@ -77,6 +79,10 @@ for value_name in PORT SERVER_READY_TIMEOUT SERVER_STOP_TIMEOUT; do
 done
 if [[ "$KEEP_SERVER_RUNNING" != 0 && "$KEEP_SERVER_RUNNING" != 1 ]]; then
   echo "ERROR: KEEP_SERVER_RUNNING must be 0 or 1." >&2
+  exit 2
+fi
+if [[ "$PUBLISH_REPORTS" != 0 && "$PUBLISH_REPORTS" != 1 ]]; then
+  echo "ERROR: PUBLISH_REPORTS must be 0 or 1." >&2
   exit 2
 fi
 
@@ -380,6 +386,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "model_directory": "$MODEL_DIR",
   "model_revision": "$model_revision",
   "model_load_format": "dummy",
+  "benchmark_configs": ["dp8", "pcp8"],
   "port": $PORT
 }
 EOF
@@ -395,31 +402,110 @@ if ! command -v setsid >/dev/null 2>&1; then
 fi
 
 SERVER_PID=""
+SERVER_CONFIG=""
 RUN_SUCCEEDED=0
 
 stop_server() {
+  local target_config
+  local target_pid
+
   if [[ -z "$SERVER_PID" ]]; then
     return
   fi
   if (( KEEP_SERVER_RUNNING && RUN_SUCCEEDED )); then
-    echo "Keeping server process group $SERVER_PID running."
+    echo "Keeping $SERVER_CONFIG server process group $SERVER_PID running."
     return
   fi
 
-  echo "Stopping server process group $SERVER_PID..."
-  kill -TERM -- "-$SERVER_PID" 2>/dev/null || true
+  target_pid=$SERVER_PID
+  target_config=$SERVER_CONFIG
+  echo "Stopping $target_config server process group $target_pid..."
+  kill -TERM -- "-$target_pid" 2>/dev/null || true
   for _ in {1..30}; do
-    if ! kill -0 -- "-$SERVER_PID" 2>/dev/null; then
-      wait "$SERVER_PID" 2>/dev/null || true
-      echo "Server stopped."
+    if ! kill -0 -- "-$target_pid" 2>/dev/null; then
+      wait "$target_pid" 2>/dev/null || true
+      SERVER_PID=""
+      SERVER_CONFIG=""
+      echo "$target_config server stopped."
       return
     fi
     sleep 1
   done
 
-  echo "Server did not stop after 30 seconds; sending SIGKILL."
-  kill -KILL -- "-$SERVER_PID" 2>/dev/null || true
-  wait "$SERVER_PID" 2>/dev/null || true
+  echo "$target_config server did not stop after 30 seconds; sending SIGKILL."
+  kill -KILL -- "-$target_pid" 2>/dev/null || true
+  wait "$target_pid" 2>/dev/null || true
+  SERVER_PID=""
+  SERVER_CONFIG=""
+}
+
+start_server() {
+  local benchmark_config=$1
+  local server_script=$2
+  local server_log="$RUN_DIR/${benchmark_config}_server.log"
+  local ready=0
+
+  if [[ -n "$SERVER_PID" ]]; then
+    echo "ERROR: cannot start $benchmark_config while $SERVER_CONFIG is running." >&2
+    return 1
+  fi
+
+  echo "Starting $benchmark_config dummy-weight inference server..."
+  setsid "$server_script" > "$server_log" 2>&1 &
+  SERVER_PID=$!
+  SERVER_CONFIG=$benchmark_config
+  echo "$SERVER_PID" > "$RUN_DIR/${benchmark_config}_server.pid"
+
+  for (( waited = 0; waited < SERVER_READY_TIMEOUT; waited += 2 )); do
+    if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null; then
+      ready=1
+      break
+    fi
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+      echo "ERROR: $benchmark_config server exited during startup." >&2
+      tail -n 200 "$server_log" >&2
+      return 1
+    fi
+    if (( waited > 0 && waited % 60 == 0 )); then
+      echo "Waiting for $benchmark_config server... ${waited}s elapsed"
+    fi
+    sleep 2
+  done
+
+  if (( ! ready )); then
+    echo "ERROR: $benchmark_config server did not become healthy within ${SERVER_READY_TIMEOUT}s." >&2
+    tail -n 200 "$server_log" >&2
+    return 1
+  fi
+  echo "$benchmark_config server is healthy on port $PORT."
+}
+
+run_benchmark_suite() {
+  local benchmark_config=$1
+  local result_dir="$RUN_DIR/results/$benchmark_config"
+
+  mkdir -p "$result_dir"
+  echo "Running $benchmark_config decode benchmark..."
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
+    --base-url "http://127.0.0.1:$PORT" \
+    --model Qwen3.5-397B-A17B-FP8 \
+    --output-dir "$result_dir/decode_sliding_window" \
+    --concurrency 16 \
+    --prefill-tokens 65536 \
+    --decode-tokens 1024 \
+    --tokenizer-dir "$MODEL_DIR" \
+    --rounds 3 \
+    --window-seconds 10 \
+    --step-seconds 1 \
+    2>&1 | tee "$RUN_DIR/${benchmark_config}_decode_benchmark.log"
+
+  echo "Running $benchmark_config prefill benchmark..."
+  BENCHMARK_CONFIG="$benchmark_config" PUBLISH_REPORTS=0 \
+    "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR" \
+    2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_benchmark.log"
+
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
+  echo "$benchmark_config benchmark suite completed successfully."
 }
 
 on_signal() {
@@ -430,50 +516,18 @@ on_signal() {
 trap stop_server EXIT
 trap on_signal INT TERM
 
-echo "Starting dummy-weight inference server..."
-setsid "$SCRIPT_DIR/run.sh" > "$RUN_DIR/server.log" 2>&1 &
-SERVER_PID=$!
-echo "$SERVER_PID" > "$RUN_DIR/server.pid"
+start_server dp8 "$SCRIPT_DIR/start_dp_server.sh"
+run_benchmark_suite dp8
+stop_server
 
-ready=0
-for (( waited = 0; waited < SERVER_READY_TIMEOUT; waited += 2 )); do
-  if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null; then
-    ready=1
-    break
-  fi
-  if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-    echo "ERROR: server exited during startup." >&2
-    tail -n 200 "$RUN_DIR/server.log" >&2
-    exit 1
-  fi
-  if (( waited > 0 && waited % 60 == 0 )); then
-    echo "Waiting for server... ${waited}s elapsed"
-  fi
-  sleep 2
-done
+start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh"
+run_benchmark_suite pcp8
 
-if (( ! ready )); then
-  echo "ERROR: server did not become healthy within ${SERVER_READY_TIMEOUT}s." >&2
-  tail -n 200 "$RUN_DIR/server.log" >&2
-  exit 1
+if (( PUBLISH_REPORTS )); then
+  "$SCRIPT_DIR/publish_report.sh"
+else
+  echo "Skipping Git report publication because PUBLISH_REPORTS=0."
 fi
-echo "Server is healthy on port $PORT."
 
-"$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
-  --base-url "http://127.0.0.1:$PORT" \
-  --model Qwen3.5-397B-A17B-FP8 \
-  --output-dir "$RUN_DIR/results/decode_sliding_window" \
-  --concurrency 16 \
-  --prefill-tokens 65536 \
-  --decode-tokens 1024 \
-  --tokenizer-dir "$MODEL_DIR" \
-  --rounds 3 \
-  --window-seconds 10 \
-  --step-seconds 1 \
-  2>&1 | tee "$RUN_DIR/decode_benchmark.log"
-
-"$SCRIPT_DIR/bench_all.sh" "$RUN_DIR" 2>&1 | tee "$RUN_DIR/benchmark.log"
-
-curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
 RUN_SUCCEEDED=1
 echo "Daily TPU benchmark completed successfully at $(date -u --iso-8601=seconds)"

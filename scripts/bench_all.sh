@@ -72,7 +72,7 @@ for concurrency in "${concurrencies[@]}"; do
     --random-input-len "$INPUT_LEN" \
     --random-output-len "$OUTPUT_LEN" \
     --random-range-ratio 0 \
-    --num-prompts "$concurrency" \
+    --num-prompts 128 \
     --request-rate inf \
     --max-concurrency "$concurrency" \
     --ignore-eos \

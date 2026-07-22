@@ -699,8 +699,78 @@
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
       "torchtpu_vllm_revision": "db5ae0ab3941792f4661153aca13b2ca5a8e47b0"
+    },
+    {
+      "benchmark_config": "dp8",
+      "best_concurrency": 32,
+      "best_request_throughput": 5.90248401799374,
+      "best_total_token_throughput": 48359.05155942271,
+      "completed_at": "2026-07-22T08:26:19+00:00",
+      "concurrency_results": [
+        {
+          "concurrency": 1,
+          "mean_ttft_ms": 1904.8136793660433,
+          "p99_ttft_ms": 1932.4293512868462,
+          "request_throughput": 0.5249270813057868,
+          "total_token_throughput": 4300.727577138311
+        },
+        {
+          "concurrency": 2,
+          "mean_ttft_ms": 2359.6126043678396,
+          "p99_ttft_ms": 3679.924021604529,
+          "request_throughput": 0.8468590812828058,
+          "total_token_throughput": 6938.316452950028
+        },
+        {
+          "concurrency": 4,
+          "mean_ttft_ms": 1940.98440477228,
+          "p99_ttft_ms": 2064.224624597992,
+          "request_throughput": 2.0135153906795606,
+          "total_token_throughput": 16496.731595837642
+        },
+        {
+          "concurrency": 8,
+          "mean_ttft_ms": 1646.1131927417227,
+          "p99_ttft_ms": 1760.3524859718163,
+          "request_throughput": 4.8216225956430625,
+          "total_token_throughput": 39503.55392610362
+        },
+        {
+          "concurrency": 16,
+          "mean_ttft_ms": 2951.583725149476,
+          "p99_ttft_ms": 3820.8744212772604,
+          "request_throughput": 5.2113716592843105,
+          "total_token_throughput": 42696.76800451636
+        },
+        {
+          "concurrency": 32,
+          "mean_ttft_ms": 4904.060522997497,
+          "p99_ttft_ms": 6359.908729655726,
+          "request_throughput": 5.90248401799374,
+          "total_token_throughput": 48359.05155942271
+        },
+        {
+          "concurrency": 64,
+          "mean_ttft_ms": 8544.23477122009,
+          "p99_ttft_ms": 11452.13497133198,
+          "request_throughput": 5.8956848411155045,
+          "total_token_throughput": 48303.34590325933
+        }
+      ],
+      "input_length": 8192,
+      "machine_ip": "10.42.4.22",
+      "mean_ttft_ms": 4904.060522997497,
+      "model": "Qwen3.5-397B-A17B-FP8",
+      "output_length": 1,
+      "p99_ttft_ms": 6359.908729655726,
+      "run_id": "manual-20260722T081519Z",
+      "started_at": "2026-07-22T08:15:19+00:00",
+      "summary_path": "runs/manual-20260722T081519Z/results/dp8/summary.json",
+      "torch_tpu_revision": "",
+      "torch_tpu_version": "unknown",
+      "torchtpu_vllm_revision": "unknown"
     }
   ],
   "schema_version": 2,
-  "updated_at": "2026-07-22T05:17:04+00:00"
+  "updated_at": "2026-07-22T08:26:19+00:00"
 }

@@ -15,11 +15,12 @@ Recent DP8 vs PCP8 peak throughput over time:
 
 [![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)](reports/index.html)
 
-Latest successful DP8: **46,240.26 total tok/s** at concurrency **16** (`20260722T014057Z`).
+Latest successful DP8: **48,359.05 total tok/s** at concurrency **32** (`manual-20260722T081519Z`).
 Latest successful PCP8: **34,296.71 total tok/s** at concurrency **16** (`manual-pcp8-bench-20260722T050712Z`).
 
 | Completed (UTC) | Config | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
 |---|---|---:|---:|---:|---:|
+| 2026-07-22 08:26 | DP8 | 48,359.05 | 32 | 5.902 | 6,359.9 |
 | 2026-07-22 05:17 | PCP8 | 34,296.71 | 16 | 4.186 | 4,883.4 |
 | 2026-07-22 02:28 | DP8 | 46,240.26 | 16 | 5.644 | 3,738.4 |
 | 2026-07-21 18:39 | DP8 | 40,378.43 | 64 | 4.928 | 12,381.2 |
@@ -29,7 +30,6 @@ Latest successful PCP8: **34,296.71 total tok/s** at concurrency **16** (`manual
 | 2026-07-18 00:01 | DP8 | 44,371.29 | 64 | 5.416 | 11,793.6 |
 | 2026-07-17 09:18 | DP8 | 49,360.61 | 64 | 6.025 | 10,597.1 |
 | 2026-07-17 08:58 | DP8 | 49,372.29 | 64 | 6.026 | 10,591.7 |
-| 2026-07-17 08:05 | DP8 | 49,381.83 | 64 | 6.027 | 10,594.9 |
 
 The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

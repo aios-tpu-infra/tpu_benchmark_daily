@@ -138,6 +138,43 @@ class DualSeriesReportTest(unittest.TestCase):
             payload["benchmarks"]["pcp8"]["total_token_throughput"], 35_000.0
         )
 
+    def test_history_chart_contains_two_time_series(self) -> None:
+        history_runs = [
+            make_run(
+                "dp8",
+                run_id="20260721T180001Z",
+                completed_at="2026-07-21T18:20:00+00:00",
+                throughput=39_000.0,
+            ),
+            make_run(
+                "pcp8",
+                run_id="20260721T180001Z",
+                completed_at="2026-07-21T18:40:00+00:00",
+                throughput=34_000.0,
+            ),
+            *self.runs,
+        ]
+        series, labels = REPORT.history_chart_data(history_runs)
+
+        svg = REPORT.chart_svg(
+            series,
+            labels,
+            title="DP8 vs PCP8 peak throughput over time",
+        )
+        root = ET.fromstring(svg)
+        polylines = root.findall("{http://www.w3.org/2000/svg}polyline")
+
+        self.assertEqual(labels, ["07-21 18:40", "07-22 18:40"])
+        self.assertEqual(len(polylines), 2)
+        self.assertIn("DP8", svg)
+        self.assertIn("PCP8", svg)
+
+    def test_readme_block_embeds_both_report_charts(self) -> None:
+        block = REPORT.render_readme_block(self.runs, table_limit=10)
+
+        self.assertIn("reports/throughput.svg", block)
+        self.assertIn("reports/throughput_history.svg", block)
+
 
 if __name__ == "__main__":
     unittest.main()

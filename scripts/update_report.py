@@ -681,7 +681,14 @@ def render_html(runs: list[dict[str, Any]], display_limit: int) -> str:
     trend_svg = chart_svg(
         trend_series,
         trend_labels,
-        title=f"Peak total token throughput — last {visible_run_count} runs",
+        title=(
+            "DP8 vs PCP8 peak throughput over time — "
+            f"last {visible_run_count} runs"
+        ),
+        description=(
+            "Peak total token throughput for recent DP8 and PCP8 benchmark "
+            "runs, ordered by completion time."
+        ),
         id_prefix="trend",
         standalone=False,
     )
@@ -824,7 +831,15 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     return "\n".join(
         [
             README_START,
-            "[![Recent peak throughput](reports/throughput.svg)](reports/index.html)",
+            "Latest DP8 vs PCP8 throughput by concurrency:",
+            "",
+            "[![Latest DP8 vs PCP8 throughput by concurrency]"
+            "(reports/throughput.svg)](reports/index.html)",
+            "",
+            "Recent DP8 vs PCP8 peak throughput over time:",
+            "",
+            "[![Recent DP8 vs PCP8 peak throughput over time]"
+            "(reports/throughput_history.svg)](reports/index.html)",
             "",
             *latest_lines,
             "",
@@ -832,8 +847,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "|---|---|---:|---:|---:|---:|",
             *rows,
             "",
-            "The chart compares the latest successful DP8 and PCP8 throughput "
-            "across concurrency levels; see "
+            "The charts compare the latest successful DP8 and PCP8 throughput "
+            "across concurrency levels and track recent peak throughput over "
+            "time; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
             "[`reports/throughput_history.json`](reports/throughput_history.json) "
             "for the full history.",
@@ -864,6 +880,7 @@ def main() -> None:
     latest_path = reports_dir / "latest.json"
     csv_path = reports_dir / "throughput_history.csv"
     svg_path = reports_dir / "throughput.svg"
+    history_svg_path = reports_dir / "throughput_history.svg"
     html_path = reports_dir / "index.html"
     readme_path = project_root / "README.md"
     lock_path = project_root / ".state" / "benchmark_report.lock"
@@ -883,6 +900,9 @@ def main() -> None:
         runs = update_history(load_history(history_path), record)
         latest = latest_runs_by_config(runs)
         homepage_series, homepage_labels = concurrency_chart_data(latest)
+        visible_runs = visible_history_runs(runs, args.display_limit)
+        history_series, history_labels = history_chart_data(visible_runs)
+        visible_run_count = len({run["run_id"] for run in visible_runs})
 
         atomic_write(history_path, render_history_json(runs))
         atomic_write(latest_path, render_latest_json(runs))
@@ -897,6 +917,22 @@ def main() -> None:
                     "Total token throughput at each tested concurrency for the "
                     "latest successful DP8 and PCP8 benchmarks."
                 ),
+            ),
+        )
+        atomic_write(
+            history_svg_path,
+            chart_svg(
+                history_series,
+                history_labels,
+                title=(
+                    "DP8 vs PCP8 peak throughput over time — "
+                    f"last {visible_run_count} runs"
+                ),
+                description=(
+                    "Peak total token throughput for recent DP8 and PCP8 "
+                    "benchmark runs, ordered by completion time."
+                ),
+                id_prefix="history",
             ),
         )
         atomic_write(html_path, render_html(runs, args.display_limit))

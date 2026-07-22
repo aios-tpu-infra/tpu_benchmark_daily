@@ -7,7 +7,13 @@ TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-i
 ## Recent benchmark throughput
 
 <!-- BENCHMARK_REPORT_START -->
-[![Recent peak throughput](reports/throughput.svg)](reports/index.html)
+Latest DP8 vs PCP8 throughput by concurrency:
+
+[![Latest DP8 vs PCP8 throughput by concurrency](reports/throughput.svg)](reports/index.html)
+
+Recent DP8 vs PCP8 peak throughput over time:
+
+[![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)](reports/index.html)
 
 Latest successful DP8: **46,240.26 total tok/s** at concurrency **16** (`20260722T014057Z`).
 Latest successful PCP8: **34,296.71 total tok/s** at concurrency **16** (`manual-pcp8-bench-20260722T050712Z`).
@@ -25,7 +31,7 @@ Latest successful PCP8: **34,296.71 total tok/s** at concurrency **16** (`manual
 | 2026-07-17 08:58 | DP8 | 49,372.29 | 64 | 6.026 | 10,591.7 |
 | 2026-07-17 08:05 | DP8 | 49,381.83 | 64 | 6.027 | 10,594.9 |
 
-The chart compares the latest successful DP8 and PCP8 throughput across concurrency levels; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
+The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
 
 ## Layout
@@ -41,7 +47,7 @@ The chart compares the latest successful DP8 and PCP8 throughput across concurre
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
-- `reports/`: durable peak-throughput history, README chart, and static dashboard.
+- `reports/`: durable peak-throughput history, README charts, and static dashboard.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
@@ -92,11 +98,11 @@ benchmark by default. Use `--keep-server-running` only for interactive
 debugging; when successful, it keeps the final PCP8 server alive.
 
 After every successful full benchmark, the runner records the highest
-`total_token_throughput` separately for DP8 and PCP8, regenerates the two-series
-chart and dashboard, then commits `README.md` and `reports/` once and pushes that
-commit directly to `origin/main`. The GitHub repository homepage therefore
-shows both curves without a separate web service. Set `PUBLISH_REPORTS=0` to
-disable commit and push for a local-only run.
+`total_token_throughput` separately for DP8 and PCP8, regenerates the concurrency
+comparison, time-series chart, and dashboard, then commits `README.md` and
+`reports/` once and pushes that commit directly to `origin/main`. The GitHub
+repository homepage therefore shows both comparisons without a separate web
+service. Set `PUBLISH_REPORTS=0` to disable commit and push for a local-only run.
 
 The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
 Open the full local dashboard directly with a browser, or serve it locally:

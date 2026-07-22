@@ -7,7 +7,6 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-TORCH_TPU_DIR="${TORCH_TPU_DIR:-$PROJECT_ROOT/third_party/torch_tpu}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
@@ -45,19 +44,18 @@ if [[ ! -d "$TORCHTPU_DIR/src/vllm_torchtpu" ]]; then
   echo "ERROR: vllm-torchtpu submodule is missing: $TORCHTPU_DIR" >&2
   exit 1
 fi
-if [[ ! -f "$TORCH_TPU_DIR/pyproject.toml" ]]; then
-  echo "ERROR: torch_tpu submodule is missing: $TORCH_TPU_DIR" >&2
-  exit 1
-fi
 if [[ ! -f "$MODEL_DIR/config.json" || ! -f "$MODEL_DIR/tokenizer.json" ]]; then
   echo "ERROR: local model metadata is incomplete: $MODEL_DIR" >&2
   exit 1
 fi
 
 SOURCE_REV=$(git -C "$TORCHTPU_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
-TORCH_TPU_REV=$(git -C "$TORCH_TPU_DIR" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+TORCH_TPU_VERSION=$(
+  "$VENV_DIR/bin/python" -c \
+    'from importlib.metadata import version; print(version("torch-tpu"))'
+)
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
-CACHE_KEY="${SOURCE_REV}_${TORCH_TPU_REV}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_cs${COMPILE_SIZES_CACHE_KEY}"
+CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_cs${COMPILE_SIZES_CACHE_KEY}"
 
 export PJRT_DEVICE=TPU
 export VLLM_TARGET_DEVICE=tpu
@@ -106,7 +104,7 @@ COMPILATION_CONFIG=$(printf \
 
 echo "Starting $SERVED_MODEL_NAME from offline metadata at $MODEL_DIR"
 echo "vllm-torchtpu revision: $SOURCE_REV"
-echo "torch_tpu revision:      $TORCH_TPU_REV"
+echo "torch_tpu version:       $TORCH_TPU_VERSION"
 echo "load format: dummy"
 echo "compile sizes: $COMPILE_SIZES"
 

@@ -2,7 +2,3 @@
 	path = third_party/torchtpu-vllm
 	url = git@github.com:vllm-project/vllm-torchtpu.git
 	branch = main
-[submodule "third_party/torch_tpu"]
-	path = third_party/torch_tpu
-	url = git@github.com:google-pytorch/torch_tpu.git
-	branch = main

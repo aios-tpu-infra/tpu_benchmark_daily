@@ -271,7 +271,10 @@ def build_record(
         "torchtpu_vllm_revision": str(
             metadata.get("torchtpu_vllm_revision", "unknown")
         ),
-        "torch_tpu_revision": str(metadata.get("torch_tpu_revision", "unknown")),
+        # Source-backed runs recorded a Git revision. Pip-backed runs have no
+        # source checkout, so retain this legacy field as an empty value for
+        # history/CSV compatibility and use the package version for display.
+        "torch_tpu_revision": str(metadata.get("torch_tpu_revision", "")),
         "torch_tpu_version": str(metadata.get("torch_tpu_version", "unknown")),
         "summary_path": relative_path(summary_path, project_root),
         "concurrency_results": concurrency_results,
@@ -535,7 +538,7 @@ def render_html(runs: list[dict[str, Any]], display_limit: int) -> str:
             f"<td class=number>{run['best_concurrency']}</td>"
             f"<td class=number>{run['best_request_throughput']:,.3f}</td>"
             f"<td class=number>{run['p99_ttft_ms']:,.1f}</td>"
-            f"<td><code>{html.escape(run['torch_tpu_revision'][:12])}</code></td>"
+            f"<td><code>{html.escape(run['torch_tpu_version'])}</code></td>"
             "</tr>"
         )
 

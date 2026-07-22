@@ -50,18 +50,17 @@ if ! git -C "$PROJECT_ROOT" diff --cached --quiet; then
   exit 1
 fi
 
-# Source updates intentionally leave the submodule gitlinks modified. They are
-# allowed in the worktree but are never staged by this publisher.
+# Source updates intentionally leave the vllm-torchtpu submodule gitlink
+# modified. It is allowed in the worktree but is never staged by this publisher.
 unexpected_changes=$(git -C "$PROJECT_ROOT" status --porcelain=v1 \
   --untracked-files=all -- \
   . \
   ':(exclude)README.md' \
   ':(exclude)reports' \
   ':(exclude)reports/**' \
-  ':(exclude)third_party/torch_tpu' \
   ':(exclude)third_party/torchtpu-vllm')
 if [[ -n "$unexpected_changes" ]]; then
-  echo "ERROR: the worktree contains changes outside README.md/reports and the two submodules:" >&2
+  echo "ERROR: the worktree contains changes outside README.md/reports and the vllm-torchtpu submodule:" >&2
   printf '%s\n' "$unexpected_changes" >&2
   echo "Refusing to create an unattended commit." >&2
   exit 1

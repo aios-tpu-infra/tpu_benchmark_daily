@@ -7,7 +7,6 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-TORCH_TPU_DIR="${TORCH_TPU_DIR:-$PROJECT_ROOT/third_party/torch_tpu}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
@@ -42,9 +41,9 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
   --keep-server-running  Keep a successfully benchmarked server alive.
 
 The default full workflow stops an existing vLLM service on PORT, updates
-vllm-torchtpu/main and torch_tpu/main, builds and installs torch_tpu from source,
-updates .venv, starts the dummy-weight server, waits for /health, runs all
-benchmarks, saves results, and stops it.
+vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
+.venv, starts the dummy-weight server, waits for /health, runs all benchmarks,
+saves results, and stops it.
 EOF
 }
 
@@ -344,12 +343,10 @@ fi
 "$SCRIPT_DIR/update_environment.sh"
 
 source_revision=$(git -C "$TORCHTPU_DIR" rev-parse HEAD)
-torch_tpu_revision=$(git -C "$TORCH_TPU_DIR" rev-parse HEAD)
 torch_tpu_version=$(
   "$VENV_DIR/bin/python" -c \
     'from importlib.metadata import version; print(version("torch-tpu"))'
 )
-torch_tpu_wheel=$(basename -- "$(<"$STATE_DIR/last_torch_tpu_wheel")")
 model_revision=$(python3.12 -c \
   'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["revision"])' \
   "$MODEL_DIR/SOURCE.json")
@@ -378,9 +375,8 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "started_at": "$(date -u --iso-8601=seconds)",
   "machine_ip": "$MACHINE_IP",
   "torchtpu_vllm_revision": "$source_revision",
-  "torch_tpu_revision": "$torch_tpu_revision",
   "torch_tpu_version": "$torch_tpu_version",
-  "torch_tpu_wheel": "$torch_tpu_wheel",
+  "torch_tpu_install_source": "pip",
   "model_directory": "$MODEL_DIR",
   "model_revision": "$model_revision",
   "model_load_format": "dummy",

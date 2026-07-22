@@ -30,27 +30,32 @@ The chart shows successful runs only; see [`reports/latest.json`](reports/latest
 
 - `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
   refreshed from `origin/main` (the local path is retained for compatibility).
-- `third_party/torch_tpu/`: Git submodule, refreshed from `origin/main` and
-  built locally with Bazel.
 - `models/`: offline model metadata; no checkpoint weights.
 - `scripts/run.sh`: starts the vLLM server with `--load-format dummy`.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64.
-- `scripts/update_environment.sh`: updates both submodules, builds and installs
-  `torch_tpu`, then synchronizes the project `.venv`.
+- `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
+  compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
+  synchronizes the rest of the project `.venv`.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
 - `reports/`: durable peak-throughput history, README chart, and static dashboard.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
 
-The machine needs `git`, `uv`, and Bazelisk (or Bazel). SSH access to GitHub is
-required for the `git@github.com:google-pytorch/torch_tpu.git` submodule. The
-first build also needs network access to the public Bazel, PyPI, and PyTorch CPU
-package sources.
+The machine needs `git`, `uv`, the Google Cloud CLI, and Python 3.12. SSH access
+to GitHub is required for the `vllm-torchtpu` submodule. The active gcloud user
+must have read access to the private `torch-tpu` Artifact Registry. Authenticate
+that user before the first run:
 
-No Google Artifact Registry credential is required: the private `torch-tpu`
-package source declared by `vllm-torchtpu` is overridden with the wheel built
-from `third_party/torch_tpu`.
+```bash
+gcloud auth login
+gcloud auth list --filter=status:ACTIVE
+```
+
+The installer deliberately uses `gcloud auth print-access-token` instead of
+Application Default Credentials because these can represent different users or
+permissions. For non-gcloud automation, `TORCH_TPU_ACCESS_TOKEN` can provide a
+short-lived token explicitly.
 
 Run:
 
@@ -58,12 +63,13 @@ Run:
 scripts/daily_benchmark.sh --prepare-only
 ```
 
-Each invocation fetches the latest `main` revision of both source projects,
-runs the official Python 3.12 wheel target with `--config=no_rbe`, and reinstalls
-that local wheel. Bazel reuses its incremental cache from `.runtime/bazel/`;
-built wheels are retained under `.runtime/wheels/`. The wheel keeps the
-compatibility version pinned by `vllm-torchtpu` and appends `+g<source SHA>` so
-the installed package remains both dependency-compatible and traceable.
+Each invocation fetches the latest `vllm-torchtpu/main`, reads its exact
+compatible `torch` and `torch-tpu` pins, and runs pip against the private
+`torch-tpu` virtual registry. Installing the exact `torch` pin first is
+intentional: `torch-tpu` alone has a broad dependency constraint that can select
+a newer ABI-incompatible PyTorch build. The downloaded `torch-tpu` wheel is
+force-reinstalled so a previous source-built wheel cannot remain in `.venv`.
+The remaining dependencies are then synchronized with `uv`.
 
 ## Manual full run
 
@@ -96,8 +102,8 @@ python3 -m http.server 8000 --directory reports
 Then visit `http://127.0.0.1:8000/`. Automatic publication uses the repository's
 configured Git SSH credentials. It refuses to run when `main` differs from the
 remote, the index is not empty, or unrelated project files are modified. The
-two source submodule pointers may be modified by their daily updates, but they
-are never included in the generated-report commit.
+`vllm-torchtpu` submodule pointer may be modified by its daily update, but it is
+never included in the generated-report commit.
 
 ## Example crontab
 
@@ -108,7 +114,7 @@ Run every day at 02:00 UTC:
 ```
 
 The runner uses absolute project paths internally, takes an exclusive `flock`,
-and writes all output beneath `runs/<UTC timestamp>/`. The exact revisions of
-both subprojects, the locally built wheel version, and the machine IP are saved
-in each run's `run_metadata.json`. Set `MACHINE_IP` to override automatic
+and writes all output beneath `runs/<UTC timestamp>/`. The exact
+`vllm-torchtpu` revision, pip-installed `torch_tpu` version, and machine IP are
+saved in each run's `run_metadata.json`. Set `MACHINE_IP` to override automatic
 primary-address detection when the machine has multiple network interfaces.

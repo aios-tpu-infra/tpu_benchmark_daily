@@ -5,21 +5,20 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-TORCH_TPU_DIR="${TORCH_TPU_DIR:-$PROJECT_ROOT/third_party/torch_tpu}"
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
-RUNTIME_DIR="${RUNTIME_DIR:-$PROJECT_ROOT/.runtime}"
-BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$RUNTIME_DIR/bazel}"
+TORCH_TPU_INDEX_URL="${TORCH_TPU_INDEX_URL:-https://us-python.pkg.dev/ml-oss-artifacts-transient/torch-tpu-virtual-registry/simple/}"
 UPDATE_SOURCE=1
 
 usage() {
   cat <<'EOF'
 Usage: scripts/update_environment.sh [--no-source-update]
 
-Updates vllm-torchtpu and torch_tpu to origin/main, builds a Python 3.12
-torch_tpu wheel locally with Bazel, and synchronizes the project-local .venv.
+Updates vllm-torchtpu to origin/main, reads its exact compatible torch and
+torch-tpu pins, installs both from Google Artifact Registry with pip, and
+synchronizes the project-local .venv.
 
-  --no-source-update  Build and install the revisions already checked out.
+  --no-source-update  Install using the vllm-torchtpu revision already checked out.
 EOF
 }
 
@@ -52,19 +51,6 @@ else
   exit 1
 fi
 
-if [[ -n "${BAZEL_BIN:-}" ]]; then
-  BAZEL=$BAZEL_BIN
-elif command -v bazelisk >/dev/null 2>&1; then
-  BAZEL=$(command -v bazelisk)
-elif [[ -x "$HOME/.local/bin/bazelisk" ]]; then
-  BAZEL="$HOME/.local/bin/bazelisk"
-elif command -v bazel >/dev/null 2>&1; then
-  BAZEL=$(command -v bazel)
-else
-  echo "ERROR: Bazel or Bazelisk is required but was not found." >&2
-  exit 1
-fi
-
 ensure_clean() {
   local name=$1
   local path=$2
@@ -91,35 +77,28 @@ update_main() {
 }
 
 if (( UPDATE_SOURCE )); then
-  # Check initialized repositories before submodule update so local work is not
-  # hidden by a checkout attempt.
+  # Check an initialized repository before submodule update so local work is
+  # not hidden by a checkout attempt.
   if git -C "$TORCHTPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     ensure_clean "vllm-torchtpu" "$TORCHTPU_DIR"
   fi
-  if git -C "$TORCH_TPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    ensure_clean "torch_tpu" "$TORCH_TPU_DIR"
-  fi
 
   git -C "$PROJECT_ROOT" submodule update --init --depth 1 -- \
-    third_party/torchtpu-vllm \
-    third_party/torch_tpu
-
+    third_party/torchtpu-vllm
   update_main "vllm-torchtpu" "$TORCHTPU_DIR"
-  update_main "torch_tpu" "$TORCH_TPU_DIR"
 fi
 
-for submodule in "$TORCHTPU_DIR" "$TORCH_TPU_DIR"; do
-  if ! git -C "$submodule" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "ERROR: required submodule is not initialized: $submodule" >&2
-    exit 1
-  fi
-done
+if ! git -C "$TORCHTPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "ERROR: required submodule is not initialized: $TORCHTPU_DIR" >&2
+  exit 1
+fi
+if [[ ! -f "$TORCHTPU_DIR/pyproject.toml" ]]; then
+  echo "ERROR: vllm-torchtpu metadata is missing: $TORCHTPU_DIR/pyproject.toml" >&2
+  exit 1
+fi
 
 torchtpu_vllm_revision=$(git -C "$TORCHTPU_DIR" rev-parse HEAD)
-torch_tpu_revision=$(git -C "$TORCH_TPU_DIR" rev-parse HEAD)
-torch_tpu_short_revision=${torch_tpu_revision:0:12}
 echo "Using vllm-torchtpu revision: $torchtpu_vllm_revision"
-echo "Using torch_tpu revision:      $torch_tpu_revision"
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "Creating Python 3.12 environment: $VENV_DIR"
@@ -135,12 +114,17 @@ if [[ "$python_version" != 3.12 ]]; then
   exit 1
 fi
 
-mkdir -p "$STATE_DIR" "$RUNTIME_DIR/wheels" "$BAZEL_OUTPUT_USER_ROOT"
+# uv-created environments are intentionally unseeded. Add pip to the existing
+# environment because torch-tpu itself must now be installed and updated by
+# pip, rather than supplied as a locally built wheel override.
+if ! "$VENV_DIR/bin/python" -m pip --version >/dev/null 2>&1; then
+  echo "Bootstrapping pip in $VENV_DIR..."
+  "$VENV_DIR/bin/python" -m ensurepip --upgrade
+fi
 
-# vllm-torchtpu declares an exact compatible nightly version. Keep that public
-# version so standard dependency checks pass, and add the actual source SHA as
-# a PEP 440 local version. An exact specifier without a local part accepts it.
-compatible_torch_tpu_version=$(
+mkdir -p "$STATE_DIR"
+
+mapfile -t compatible_versions < <(
   "$VENV_DIR/bin/python" - "$TORCHTPU_DIR/pyproject.toml" <<'PY'
 import re
 import sys
@@ -149,94 +133,98 @@ import tomllib
 with open(sys.argv[1], "rb") as file:
     dependencies = tomllib.load(file)["project"]["dependencies"]
 
-matches = [
-    match.group(1)
-    for dependency in dependencies
-    if (
-        match := re.fullmatch(
-            r"torch[-_]tpu\s*==\s*([^;,\s]+)", dependency, re.IGNORECASE
+
+def canonicalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+pins: dict[str, list[str]] = {"torch": [], "torch-tpu": []}
+for dependency in dependencies:
+    match = re.fullmatch(
+        r"\s*([A-Za-z0-9_.-]+)\s*==\s*([^;,\s]+)\s*(?:;.*)?",
+        dependency,
+    )
+    if match:
+        name = canonicalize(match.group(1))
+        if name in pins:
+            pins[name].append(match.group(2))
+
+for name in ("torch", "torch-tpu"):
+    if len(pins[name]) != 1:
+        raise SystemExit(
+            f"expected one exact {name} dependency in vllm-torchtpu "
+            f"pyproject.toml, found {pins[name]}"
         )
-    )
-]
-if len(matches) != 1:
-    raise SystemExit(
-        "expected one exact torch-tpu dependency in vllm-torchtpu pyproject.toml"
-    )
-print(matches[0])
+    print(pins[name][0])
 PY
 )
-wheel_base_version=$(
-  "$VENV_DIR/bin/python" - "$TORCH_TPU_DIR/pyproject.toml" <<'PY'
-import sys
-import tomllib
-
-with open(sys.argv[1], "rb") as file:
-    print(tomllib.load(file)["project"]["version"])
-PY
-)
-if [[ "$compatible_torch_tpu_version" != "$wheel_base_version"* ]] || \
-    [[ "$compatible_torch_tpu_version" == *+* ]]; then
-  echo "ERROR: unsupported vllm-torchtpu torch-tpu pin:" >&2
-  echo "  $compatible_torch_tpu_version (source base is $wheel_base_version)" >&2
+if (( ${#compatible_versions[@]} != 2 )); then
+  echo "ERROR: could not read compatible torch and torch-tpu versions." >&2
   exit 1
 fi
-wheel_version="${compatible_torch_tpu_version}+g${torch_tpu_short_revision}"
-wheel_suffix=${wheel_version#"$wheel_base_version"}
-bazel_version=$(<"$TORCH_TPU_DIR/.bazelversion")
+compatible_torch_version=${compatible_versions[0]}
+compatible_torch_tpu_version=${compatible_versions[1]}
 
-echo "Building torch_tpu==$wheel_version locally with Bazel $bazel_version..."
-(
-  cd -- "$TORCH_TPU_DIR"
-  "$BAZEL" \
-    --output_user_root="$BAZEL_OUTPUT_USER_ROOT" \
-    build \
-    -c opt \
-    --config=no_rbe \
-    --repo_env="WHEEL_VERSION_EXTRAS=$wheel_suffix" \
-    --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-    --define PYTHON_VERSION=3.12 \
-    //ci/wheel:torch_tpu_wheel
-)
+if [[ "$TORCH_TPU_INDEX_URL" != https://* ]]; then
+  echo "ERROR: TORCH_TPU_INDEX_URL must use HTTPS." >&2
+  exit 2
+fi
 
-bazel_wheel_dir="$TORCH_TPU_DIR/bazel-bin/ci/wheel"
-mapfile -t built_wheels < <(
-  find -L "$bazel_wheel_dir" -maxdepth 1 -type f \
-    -name "torch_tpu-${wheel_version}-cp312-cp312-*.whl" \
-    -print | sort
-)
-if (( ${#built_wheels[@]} != 1 )); then
-  echo "ERROR: expected one Python 3.12 wheel for torch_tpu==$wheel_version," >&2
-  echo "but found ${#built_wheels[@]} beneath $bazel_wheel_dir." >&2
-  find -L "$bazel_wheel_dir" -maxdepth 1 -type f -name '*.whl' -print >&2 || true
+if [[ -n "${TORCH_TPU_ACCESS_TOKEN:-}" ]]; then
+  artifact_registry_token=$TORCH_TPU_ACCESS_TOKEN
+  credential_source="TORCH_TPU_ACCESS_TOKEN"
+else
+  if [[ -n "${GCLOUD_BIN:-}" ]]; then
+    GCLOUD=$GCLOUD_BIN
+  elif command -v gcloud >/dev/null 2>&1; then
+    GCLOUD=$(command -v gcloud)
+  else
+    echo "ERROR: gcloud is required to authenticate to the torch-tpu registry." >&2
+    exit 1
+  fi
+  artifact_registry_token=$("$GCLOUD" auth print-access-token)
+  credential_source=$(
+    "$GCLOUD" auth list --filter=status:ACTIVE --format='value(account)' |
+      head -n 1
+  )
+fi
+if [[ -z "$artifact_registry_token" ]]; then
+  echo "ERROR: no Google Artifact Registry access token was returned." >&2
   exit 1
 fi
 
-wheel_cache_dir="$RUNTIME_DIR/wheels/$torch_tpu_revision"
-mkdir -p "$wheel_cache_dir"
-wheel_path="$wheel_cache_dir/$(basename -- "${built_wheels[0]}")"
-wheel_tmp=$(mktemp "$wheel_cache_dir/.torch_tpu-wheel.XXXXXX")
-trap 'rm -f -- "$wheel_tmp"' EXIT
-cp -- "${built_wheels[0]}" "$wheel_tmp"
-chmod 0644 "$wheel_tmp"
-mv -f -- "$wheel_tmp" "$wheel_path"
-trap - EXIT
-wheel_uri=$(
-  "$VENV_DIR/bin/python" - "$wheel_path" <<'PY'
-import pathlib
-import sys
+authenticated_index_url="${TORCH_TPU_INDEX_URL/https:\/\//https:\/\/oauth2accesstoken:${artifact_registry_token}@}"
+echo "Installing torch==$compatible_torch_version and torch-tpu==$compatible_torch_tpu_version with pip..."
+echo "torch-tpu index:      $TORCH_TPU_INDEX_URL"
+echo "credential source:    ${credential_source:-active gcloud account}"
 
-print(pathlib.Path(sys.argv[1]).resolve().as_uri())
-PY
-)
-
-override_file="$STATE_DIR/environment.overrides.txt"
-printf 'torch-tpu @ %s\n' "$wheel_uri" > "$override_file"
+# Install the exact torch pin first. torch-tpu's own metadata currently uses a
+# broad torch>= constraint, so resolving both implicitly could select a newer,
+# ABI-incompatible torch build. Force-reinstall torch-tpu to replace any old
+# source-built wheel whose PEP 440 local suffix still satisfies the public pin.
+PIP_INDEX_URL="$authenticated_index_url" PIP_NO_INPUT=1 \
+  "$VENV_DIR/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --upgrade \
+    --pre \
+    "torch==$compatible_torch_version"
+PIP_INDEX_URL="$authenticated_index_url" PIP_NO_INPUT=1 \
+  "$VENV_DIR/bin/python" -m pip install \
+    --disable-pip-version-check \
+    --upgrade \
+    --pre \
+    --force-reinstall \
+    --no-deps \
+    "torch-tpu==$compatible_torch_tpu_version"
+authenticated_index_url=""
 
 export UV_TORCH_BACKEND="${UV_TORCH_BACKEND:-cpu}"
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 
-echo "Installing vllm-torchtpu with the locally built torch_tpu wheel..."
+echo "Synchronizing vllm-torchtpu and remaining dependencies..."
 (
+  export UV_INDEX_TORCH_TPU_REGISTRY_USERNAME=oauth2accesstoken
+  export UV_INDEX_TORCH_TPU_REGISTRY_PASSWORD="$artifact_registry_token"
   cd -- "$TORCHTPU_DIR"
   "$UV" pip install \
     --python "$VENV_DIR/bin/python" \
@@ -244,28 +232,41 @@ echo "Installing vllm-torchtpu with the locally built torch_tpu wheel..."
     --pre \
     --torch-backend "$UV_TORCH_BACKEND" \
     --keyring-provider disabled \
-    --no-sources-package torch-tpu \
-    --overrides "$override_file" \
-    --reinstall-package torch-tpu \
     --editable .
 )
+artifact_registry_token=""
 
 "$UV" pip check --python "$VENV_DIR/bin/python"
 
-installed_torch_tpu_version=$(
-  "$VENV_DIR/bin/python" -c \
-    'from importlib.metadata import version; print(version("torch-tpu"))'
-)
-if [[ "$installed_torch_tpu_version" != "$wheel_version" ]]; then
-  echo "ERROR: installed torch-tpu version is $installed_torch_tpu_version;" >&2
-  echo "expected locally built version $wheel_version." >&2
-  exit 1
-fi
+"$VENV_DIR/bin/python" - \
+  "$compatible_torch_version" \
+  "$compatible_torch_tpu_version" <<'PY'
+import sys
+from importlib.metadata import version
+from packaging.version import Version
+
+expected_torch = Version(sys.argv[1])
+expected_torch_tpu = Version(sys.argv[2])
+installed_torch = Version(version("torch"))
+installed_torch_tpu = Version(version("torch-tpu"))
+
+if installed_torch.base_version != expected_torch.base_version:
+    raise SystemExit(
+        f"installed torch version is {installed_torch}; expected {expected_torch}"
+    )
+if installed_torch_tpu != expected_torch_tpu:
+    raise SystemExit(
+        "installed torch-tpu version is "
+        f"{installed_torch_tpu}; expected registry version {expected_torch_tpu}"
+    )
+PY
 
 printf '%s\n' "$torchtpu_vllm_revision" > \
   "$STATE_DIR/last_torchtpu_vllm_revision"
-printf '%s\n' "$torch_tpu_revision" > "$STATE_DIR/last_torch_tpu_revision"
-printf '%s\n' "$wheel_path" > "$STATE_DIR/last_torch_tpu_wheel"
+printf '%s\n' "$compatible_torch_tpu_version" > \
+  "$STATE_DIR/last_torch_tpu_version"
+printf '%s\n' "$TORCH_TPU_INDEX_URL" > \
+  "$STATE_DIR/last_torch_tpu_index_url"
 printf '%s\n' "$torchtpu_vllm_revision" > "$STATE_DIR/last_source_revision"
 "$UV" pip freeze --python "$VENV_DIR/bin/python" \
   > "$STATE_DIR/environment.freeze.txt"
@@ -279,6 +280,11 @@ for distribution in ("vllm_torchtpu", "vllm", "torch", "torch-tpu", "libtpu"):
     except PackageNotFoundError:
         value = "MISSING"
     print(f"{distribution}=={value}")
+
+import torch
+import torch_tpu
+
+print(f"torch_tpu import OK; PrivateUse1 backend={torch._C._get_privateuse1_backend_name()}")
 PY
 
-echo "Local torch_tpu wheel: $wheel_path"
+echo "torch_tpu install source: pip ($TORCH_TPU_INDEX_URL)"

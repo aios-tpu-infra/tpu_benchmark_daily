@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import io
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 
@@ -100,7 +102,32 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
         self.assertTrue(
             all(window["throughput_tok_s"] == 2.0 for window in analysis.windows)
         )
-        self.assertEqual(analysis.summary["decode_tpot_ms"]["avg"], 1000.0)
+
+    def test_records_request_tpot_when_throughput_window_is_invalid(self) -> None:
+        results = [
+            BENCH.RequestResult(0, 0.0, 3.0, [0.0, 1.0, 2.0, 3.0], None),
+            BENCH.RequestResult(1, 0.0, 2.0, [0.5, 1.0, 1.5, 2.0], None),
+        ]
+
+        analysis = BENCH.analyze_round(
+            round_index=4,
+            results=results,
+            concurrency=2,
+            decode_tokens=4,
+            window_s=2.0,
+            step_s=1.0,
+        )
+
+        self.assertFalse(analysis.summary["valid"])
+        self.assertEqual(analysis.summary["window_count"], 0)
+        self.assertEqual(
+            [row["request_id"] for row in analysis.request_tpots], [0, 1]
+        )
+        self.assertEqual(
+            [row["tpot_ms"] for row in analysis.request_tpots], [1000.0, 500.0]
+        )
+        self.assertEqual(analysis.summary["request_tpot_ms"]["count"], 2)
+        self.assertEqual(analysis.summary["request_tpot_ms"]["avg"], 750.0)
 
     def test_rejects_incomplete_request(self) -> None:
         results = [
@@ -119,6 +146,66 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
 
         self.assertFalse(analysis.summary["valid"])
         self.assertEqual(analysis.summary["invalid_reason"], "incomplete_requests")
+        self.assertEqual(len(analysis.request_tpots), 1)
+        self.assertEqual(analysis.request_tpots[0]["request_id"], 0)
+        self.assertEqual(analysis.summary["request_tpot_ms"]["count"], 1)
+
+
+class CsvOutputTest(unittest.TestCase):
+    def test_writes_one_request_tpot_row_per_successful_request(self) -> None:
+        rows = [
+            {
+                "round": 1,
+                "request_id": 3,
+                "received_tokens": 4,
+                "first_token_after_batch_start_s": 1.0,
+                "last_token_after_batch_start_s": 2.5,
+                "decode_duration_s": 1.5,
+                "tpot_ms": 500.0,
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "request_tpot.csv"
+            BENCH.write_request_tpot_csv(path, rows)
+            with path.open(encoding="utf-8", newline="") as handle:
+                written = list(csv.DictReader(handle))
+
+        self.assertEqual(len(written), 1)
+        self.assertEqual(written[0]["request_id"], "3")
+        self.assertEqual(written[0]["tpot_ms"], "500.0")
+
+    def test_timeline_csv_contains_only_throughput_fields(self) -> None:
+        windows = [
+            {
+                "round": 1,
+                "window": 1,
+                "start_after_batch_start_s": 2.0,
+                "end_after_batch_start_s": 7.0,
+                "active_requests": 2,
+                "token_count": 100,
+                "throughput_tok_s": 20.0,
+            }
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "timeline.csv"
+            BENCH.write_timeline_csv(path, windows)
+            with path.open(encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                list(reader)
+                fieldnames = reader.fieldnames
+
+        self.assertEqual(
+            fieldnames,
+            [
+                "round",
+                "window",
+                "start_after_batch_start_s",
+                "end_after_batch_start_s",
+                "active_requests",
+                "token_count",
+                "throughput_tok_s",
+            ],
+        )
 
 
 if __name__ == "__main__":

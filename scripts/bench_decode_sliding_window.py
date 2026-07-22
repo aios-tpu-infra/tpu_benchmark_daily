@@ -50,7 +50,7 @@ class RequestResult:
 class RoundAnalysis:
     summary: dict[str, Any]
     windows: list[dict[str, Any]]
-    full_overlap_tpot_ms: list[float]
+    request_tpots: list[dict[str, Any]]
 
 
 def positive_int(raw: str) -> int:
@@ -119,6 +119,39 @@ def metric_stats(values: list[float]) -> dict[str, float | int | None]:
         "p90": percentile(values, 90),
         "p99": percentile(values, 99),
     }
+
+
+def build_request_tpot_rows(
+    *,
+    round_index: int,
+    results: list[RequestResult],
+    decode_tokens: int,
+    batch_start_s: float,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        received_tokens = len(result.token_times_s)
+        if (
+            result.error is not None
+            or received_tokens != decode_tokens
+            or received_tokens < 2
+        ):
+            continue
+        first_token_s = result.token_times_s[0]
+        last_token_s = result.token_times_s[-1]
+        decode_duration_s = last_token_s - first_token_s
+        rows.append(
+            {
+                "round": round_index,
+                "request_id": result.request_id,
+                "received_tokens": received_tokens,
+                "first_token_after_batch_start_s": first_token_s - batch_start_s,
+                "last_token_after_batch_start_s": last_token_s - batch_start_s,
+                "decode_duration_s": decode_duration_s,
+                "tpot_ms": decode_duration_s / (received_tokens - 1) * 1000,
+            }
+        )
+    return rows
 
 
 def token_timestamps_from_choice(
@@ -244,6 +277,12 @@ def analyze_round(
         if result.error is not None or len(result.token_times_s) != decode_tokens
     ]
     batch_start_s = min((result.started_s for result in results), default=0.0)
+    request_tpots = build_request_tpot_rows(
+        round_index=round_index,
+        results=results,
+        decode_tokens=decode_tokens,
+        batch_start_s=batch_start_s,
+    )
     summary: dict[str, Any] = {
         "round": round_index,
         "concurrency": concurrency,
@@ -254,14 +293,16 @@ def analyze_round(
         "full_overlap_duration_s": 0.0,
         "window_count": 0,
         "window_throughput_tok_s": metric_stats([]),
-        "decode_tpot_ms": metric_stats([]),
+        "request_tpot_ms": metric_stats(
+            [float(row["tpot_ms"]) for row in request_tpots]
+        ),
         "valid": False,
         "invalid_reason": "",
         "errors": failures,
     }
     if failures or len(results) != concurrency:
         summary["invalid_reason"] = "incomplete_requests"
-        return RoundAnalysis(summary, [], [])
+        return RoundAnalysis(summary, [], request_tpots)
 
     full_start_s = max(result.token_times_s[1] for result in results)
     full_end_s = min(result.token_times_s[-1] for result in results)
@@ -275,27 +316,11 @@ def analyze_round(
     )
     if full_duration_s < window_s:
         summary["invalid_reason"] = "full_overlap_shorter_than_window"
-        return RoundAnalysis(summary, [], [])
+        return RoundAnalysis(summary, [], request_tpots)
 
     all_token_times = sorted(
         timestamp for result in results for timestamp in result.token_times_s
     )
-    tpot_events: list[tuple[float, float]] = []
-    for result in results:
-        tpot_events.extend(
-            (current, (current - previous) * 1000)
-            for previous, current in zip(
-                result.token_times_s, result.token_times_s[1:]
-            )
-        )
-    tpot_events.sort(key=lambda item: item[0])
-    tpot_event_times = [timestamp for timestamp, _ in tpot_events]
-    full_overlap_tpot_ms = [
-        tpot_ms
-        for timestamp, tpot_ms in tpot_events
-        if full_start_s <= timestamp < full_end_s
-    ]
-
     windows: list[dict[str, Any]] = []
     cursor_s = full_start_s
     while cursor_s + window_s <= full_end_s + 1e-9:
@@ -303,12 +328,6 @@ def analyze_round(
         token_left = bisect.bisect_left(all_token_times, cursor_s)
         token_right = bisect.bisect_left(all_token_times, end_s)
         token_count = token_right - token_left
-        tpot_left = bisect.bisect_left(tpot_event_times, cursor_s)
-        tpot_right = bisect.bisect_left(tpot_event_times, end_s)
-        window_tpot_ms = [
-            tpot_ms for _, tpot_ms in tpot_events[tpot_left:tpot_right]
-        ]
-        window_tpot_stats = metric_stats(window_tpot_ms)
         windows.append(
             {
                 "round": round_index,
@@ -318,11 +337,6 @@ def analyze_round(
                 "active_requests": concurrency,
                 "token_count": token_count,
                 "throughput_tok_s": token_count / window_s,
-                "tpot_count": window_tpot_stats["count"],
-                "tpot_avg_ms": window_tpot_stats["avg"],
-                "tpot_p50_ms": window_tpot_stats["p50"],
-                "tpot_p90_ms": window_tpot_stats["p90"],
-                "tpot_p99_ms": window_tpot_stats["p99"],
             }
         )
         cursor_s += step_s
@@ -332,12 +346,11 @@ def analyze_round(
         {
             "window_count": len(windows),
             "window_throughput_tok_s": metric_stats(throughputs),
-            "decode_tpot_ms": metric_stats(full_overlap_tpot_ms),
-            "valid": bool(windows and full_overlap_tpot_ms),
-            "invalid_reason": "" if windows and full_overlap_tpot_ms else "no_samples",
+            "valid": bool(windows),
+            "invalid_reason": "" if windows else "no_samples",
         }
     )
-    return RoundAnalysis(summary, windows, full_overlap_tpot_ms)
+    return RoundAnalysis(summary, windows, request_tpots)
 
 
 def write_raw_requests(
@@ -363,6 +376,24 @@ def write_raw_requests(
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def write_request_tpot_csv(
+    path: Path, request_tpots: list[dict[str, Any]]
+) -> None:
+    fieldnames = [
+        "round",
+        "request_id",
+        "received_tokens",
+        "first_token_after_batch_start_s",
+        "last_token_after_batch_start_s",
+        "decode_duration_s",
+        "tpot_ms",
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(request_tpots)
+
+
 def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
     fieldnames = [
         "round",
@@ -378,13 +409,14 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         "throughput_stddev_tok_s",
         "throughput_p90_tok_s",
         "throughput_p99_tok_s",
-        "tpot_count",
-        "tpot_avg_ms",
-        "tpot_min_ms",
-        "tpot_max_ms",
-        "tpot_stddev_ms",
-        "tpot_p90_ms",
-        "tpot_p99_ms",
+        "request_tpot_count",
+        "request_tpot_avg_ms",
+        "request_tpot_min_ms",
+        "request_tpot_max_ms",
+        "request_tpot_stddev_ms",
+        "request_tpot_p50_ms",
+        "request_tpot_p90_ms",
+        "request_tpot_p99_ms",
         "invalid_reason",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -392,7 +424,7 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         writer.writeheader()
         for row in rounds:
             throughput = row["window_throughput_tok_s"]
-            tpot = row["decode_tpot_ms"]
+            request_tpot = row["request_tpot_ms"]
             writer.writerow(
                 {
                     "round": row["round"],
@@ -408,13 +440,14 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
                     "throughput_stddev_tok_s": throughput["stddev"],
                     "throughput_p90_tok_s": throughput["p90"],
                     "throughput_p99_tok_s": throughput["p99"],
-                    "tpot_count": tpot["count"],
-                    "tpot_avg_ms": tpot["avg"],
-                    "tpot_min_ms": tpot["min"],
-                    "tpot_max_ms": tpot["max"],
-                    "tpot_stddev_ms": tpot["stddev"],
-                    "tpot_p90_ms": tpot["p90"],
-                    "tpot_p99_ms": tpot["p99"],
+                    "request_tpot_count": request_tpot["count"],
+                    "request_tpot_avg_ms": request_tpot["avg"],
+                    "request_tpot_min_ms": request_tpot["min"],
+                    "request_tpot_max_ms": request_tpot["max"],
+                    "request_tpot_stddev_ms": request_tpot["stddev"],
+                    "request_tpot_p50_ms": request_tpot["p50"],
+                    "request_tpot_p90_ms": request_tpot["p90"],
+                    "request_tpot_p99_ms": request_tpot["p99"],
                     "invalid_reason": row["invalid_reason"],
                 }
             )
@@ -429,11 +462,6 @@ def write_timeline_csv(path: Path, windows: list[dict[str, Any]]) -> None:
         "active_requests",
         "token_count",
         "throughput_tok_s",
-        "tpot_count",
-        "tpot_avg_ms",
-        "tpot_p50_ms",
-        "tpot_p90_ms",
-        "tpot_p99_ms",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
@@ -449,7 +477,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
     benchmark = summary["benchmark"]
     aggregate = summary["aggregate"]
     throughput = aggregate["window_throughput_tok_s"]
-    tpot = aggregate["decode_tpot_ms"]
+    request_tpot = aggregate["request_tpot_ms"]
     valid_rounds = summary["valid_rounds"]
     requested_rounds = summary["requested_rounds"]
     lines = [
@@ -473,6 +501,10 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Tokenizer：`{benchmark['tokenizer_dir']}`",
         f"- 滑动窗口：`{benchmark['window_s']}` 秒，步长 `{benchmark['step_s']}` 秒",
         "- 边界：最慢请求第 2 个输出 token 至最快请求最后一个输出 token。",
+        (
+            "- Request TPOT：每条成功请求使用完整输出的首尾 token 时间跨度，"
+            "除以输出 token 间隔数；不依赖吞吐窗口是否有效。"
+        ),
         "",
         "## 聚合指标",
         "",
@@ -486,11 +518,13 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{format_metric(throughput['p99'])}|"
         ),
         (
-            "|TPOT (ms)|"
-            f"{tpot['count']}|{format_metric(tpot['avg'])}|"
-            f"{format_metric(tpot['min'])}|{format_metric(tpot['max'])}|"
-            f"{format_metric(tpot['stddev'])}|{format_metric(tpot['p90'])}|"
-            f"{format_metric(tpot['p99'])}|"
+            "|Request TPOT (ms)|"
+            f"{request_tpot['count']}|{format_metric(request_tpot['avg'])}|"
+            f"{format_metric(request_tpot['min'])}|"
+            f"{format_metric(request_tpot['max'])}|"
+            f"{format_metric(request_tpot['stddev'])}|"
+            f"{format_metric(request_tpot['p90'])}|"
+            f"{format_metric(request_tpot['p99'])}|"
         ),
         "",
         "## 复现",
@@ -513,7 +547,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
         (
             "|round|valid|requests|full overlap (s)|windows|"
-            "throughput avg (tok/s)|TPOT avg (ms)|reason|"
+            "throughput avg (tok/s)|Request TPOT avg (ms)|reason|"
         ),
         "|---:|:---:|---:|---:|---:|---:|---:|---|",
     ]
@@ -523,7 +557,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{row['successful_requests']}/{benchmark['concurrency']}|"
             f"{format_metric(row['full_overlap_duration_s'])}|{row['window_count']}|"
             f"{format_metric(row['window_throughput_tok_s']['avg'])}|"
-            f"{format_metric(row['decode_tpot_ms']['avg'])}|{row['invalid_reason']}|"
+            f"{format_metric(row['request_tpot_ms']['avg'])}|{row['invalid_reason']}|"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -591,7 +625,7 @@ def main() -> None:
 
     round_summaries: list[dict[str, Any]] = []
     all_windows: list[dict[str, Any]] = []
-    all_tpot_ms: list[float] = []
+    all_request_tpots: list[dict[str, Any]] = []
     for round_index in range(1, args.rounds + 1):
         print(
             f"[decode] round={round_index}/{args.rounds} "
@@ -615,12 +649,12 @@ def main() -> None:
         )
         round_summaries.append(analysis.summary)
         all_windows.extend(analysis.windows)
-        all_tpot_ms.extend(analysis.full_overlap_tpot_ms)
+        all_request_tpots.extend(analysis.request_tpots)
         print(
             f"[round-summary] valid={analysis.summary['valid']} "
             f"windows={analysis.summary['window_count']} "
             f"throughput_avg={analysis.summary['window_throughput_tok_s']['avg']} "
-            f"tpot_avg_ms={analysis.summary['decode_tpot_ms']['avg']}",
+            f"request_tpot_avg_ms={analysis.summary['request_tpot_ms']['avg']}",
             flush=True,
         )
         if round_index < args.rounds and args.cooldown_seconds:
@@ -636,7 +670,7 @@ def main() -> None:
         default=None,
     )
     summary = {
-        "schema_version": 1,
+        "schema_version": 2,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
             "base_url": base_url,
@@ -661,9 +695,9 @@ def main() -> None:
                 "concurrency": args.concurrency,
                 "failed": best_round["failed_requests"],
                 "file": "rounds.csv",
-                "mean_tpot_ms": best_round["decode_tpot_ms"]["avg"],
+                "mean_tpot_ms": best_round["request_tpot_ms"]["avg"],
                 "output_throughput": best_round["window_throughput_tok_s"]["avg"],
-                "p99_tpot_ms": best_round["decode_tpot_ms"]["p99"],
+                "p99_tpot_ms": best_round["request_tpot_ms"]["p99"],
                 "round": best_round["round"],
             }
             if best_round is not None
@@ -673,12 +707,18 @@ def main() -> None:
         "valid_rounds": len(valid_rounds),
         "aggregate": {
             "window_throughput_tok_s": metric_stats(all_throughputs),
-            "decode_tpot_ms": metric_stats(all_tpot_ms),
+            "request_tpot_ms": metric_stats(
+                [float(row["tpot_ms"]) for row in all_request_tpots]
+            ),
             "round_avg_throughput_tok_s": metric_stats(
                 [float(row["window_throughput_tok_s"]["avg"]) for row in valid_rounds]
             ),
-            "round_avg_tpot_ms": metric_stats(
-                [float(row["decode_tpot_ms"]["avg"]) for row in valid_rounds]
+            "round_avg_request_tpot_ms": metric_stats(
+                [
+                    float(row["request_tpot_ms"]["avg"])
+                    for row in round_summaries
+                    if row["request_tpot_ms"]["avg"] is not None
+                ]
             ),
         },
         "results": round_summaries,
@@ -689,6 +729,9 @@ def main() -> None:
     )
     write_rounds_csv(args.output_dir / "rounds.csv", round_summaries)
     write_timeline_csv(args.output_dir / "timeline.csv", all_windows)
+    write_request_tpot_csv(
+        args.output_dir / "request_tpot.csv", all_request_tpots
+    )
     write_markdown(args.output_dir / "summary.md", summary)
 
     if len(valid_rounds) != args.rounds:
@@ -699,7 +742,7 @@ def main() -> None:
     print(
         "[done] "
         f"throughput_avg={aggregate['window_throughput_tok_s']['avg']:.3f} tok/s "
-        f"tpot_avg={aggregate['decode_tpot_ms']['avg']:.3f} ms "
+        f"request_tpot_avg={aggregate['request_tpot_ms']['avg']:.3f} ms "
         f"output={args.output_dir}",
         flush=True,
     )

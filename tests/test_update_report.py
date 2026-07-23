@@ -168,6 +168,12 @@ class DualSeriesReportTest(unittest.TestCase):
         self.assertEqual(len(polylines), 2)
         self.assertIn("DP8", svg)
         self.assertIn("PCP8", svg)
+        last_tick = next(
+            node
+            for node in root.findall("{http://www.w3.org/2000/svg}text")
+            if node.text == labels[-1]
+        )
+        self.assertEqual(last_tick.attrib["text-anchor"], "end")
 
     def test_readme_block_embeds_both_report_charts(self) -> None:
         block = REPORT.render_readme_block(self.runs, table_limit=10)

@@ -470,8 +470,13 @@ def chart_svg(
         )
     for index in tick_indices:
         label = html.escape(str(x_labels[index]))
+        anchor = (
+            "end"
+            if len(x_labels) > 1 and index == len(x_labels) - 1
+            else "middle"
+        )
         parts.append(
-            f'<text class="axis" text-anchor="middle" x="{x_values[index]:.2f}" '
+            f'<text class="axis" text-anchor="{anchor}" x="{x_values[index]:.2f}" '
             f'y="{top + plot_height + 28}">{label}</text>'
         )
 

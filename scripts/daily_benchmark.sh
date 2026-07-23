@@ -492,10 +492,10 @@ run_benchmark_suite() {
     --output-dir "$result_dir/decode_sliding_window" \
     --concurrency 16 \
     --prefill-tokens 65536 \
-    --decode-tokens 1024 \
+    --decode-tokens 4096 \
     --tokenizer-dir "$MODEL_DIR" \
     --rounds 3 \
-    --window-seconds 10 \
+    --window-seconds 5 \
     --step-seconds 1 \
     2>&1 | tee "$RUN_DIR/${benchmark_config}_decode_benchmark.log"
 

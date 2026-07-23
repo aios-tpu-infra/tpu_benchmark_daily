@@ -2,43 +2,43 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-07-23T07:16:56+00:00",
+      "completed_at": "2026-07-23T09:07:11+00:00",
       "concurrency": 16,
-      "decode_min_tpot_ms": 20.507219412704643,
-      "decode_peak_output_throughput": 637.6851851851852,
+      "decode_min_tpot_ms": 18.721084775569732,
+      "decode_peak_output_throughput": 637.3214285714286,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
-      "mean_ttft_ms": 2453.502184906938,
+      "mean_ttft_ms": 2454.4716143186633,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 3400.8845416439,
-      "request_throughput": 6.283030355059622,
-      "run_id": "20260723T064547Z",
+      "p99_ttft_ms": 3405.139436282916,
+      "request_throughput": 6.280841392667682,
+      "run_id": "20260723T083433Z",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
       "torchtpu_vllm_revision": "a03d8effc78a327d3cb365461ef040be20581cc3",
-      "total_token_throughput": 51476.86769900348
+      "total_token_throughput": 51458.93353012631
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-07-23T07:39:30+00:00",
-      "concurrency": 32,
+      "completed_at": "2026-07-23T09:28:51+00:00",
+      "concurrency": 16,
       "decode_min_tpot_ms": null,
       "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
-      "mean_ttft_ms": 6774.874276477021,
+      "mean_ttft_ms": 3615.3348003344945,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 8561.513256051112,
-      "request_throughput": 4.183617758407235,
-      "run_id": "20260723T064547Z",
+      "p99_ttft_ms": 4885.647870093235,
+      "request_throughput": 4.185427418897767,
+      "run_id": "20260723T083433Z",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
       "torchtpu_vllm_revision": "a03d8effc78a327d3cb365461ef040be20581cc3",
-      "total_token_throughput": 34276.38029463047
+      "total_token_throughput": 34291.20684302941
     }
   },
   "schema_version": 3,
-  "updated_at": "2026-07-23T07:39:30+00:00"
+  "updated_at": "2026-07-23T09:28:51+00:00"
 }

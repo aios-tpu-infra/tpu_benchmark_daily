@@ -15,11 +15,12 @@ Recent DP8 vs PCP8 peak throughput over time:
 
 ![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)
 
-Latest successful DP8: **51,476.87 total tok/s** at concurrency **16** (`20260723T064547Z`).
-Latest successful PCP8: **34,276.38 total tok/s** at concurrency **32** (`20260723T064547Z`).
+Latest successful DP8: **51,458.93 total tok/s** at concurrency **16** (`20260723T083433Z`).
+Latest successful PCP8: **34,291.21 total tok/s** at concurrency **16** (`20260723T083433Z`).
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP peak decode tok/s | DP min TPOT (ms) |
 |---|---|---:|---:|---:|---:|
+| `a03d8effc78a` | 2026-07-23 08:34 | 51,458.93 | 34,291.21 | 637.32 | 18.72 |
 | `a03d8effc78a` | 2026-07-23 06:45 | 51,476.87 | 34,276.38 | 637.69 | 20.51 |
 | — | 2026-07-22 08:15 | 48,359.05 | — | — | — |
 | `db5ae0ab3941` | 2026-07-22 05:07 | — | 34,296.71 | — | — |
@@ -29,7 +30,6 @@ Latest successful PCP8: **34,276.38 total tok/s** at concurrency **32** (`202607
 | `d296ce153cdd` | 2026-07-19 18:00 | 44,436.44 | — | — | — |
 | `d296ce153cdd` | 2026-07-18 18:00 | 44,397.93 | — | — | — |
 | `2838d74ab880` | 2026-07-17 23:44 | 44,371.29 | — | — | — |
-| `47acb3a9ce31` | 2026-07-17 09:08 | 49,360.61 | — | — | — |
 
 The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

@@ -670,140 +670,6 @@ def render_csv(runs: list[dict[str, Any]]) -> str:
     return output.getvalue()
 
 
-def render_html(runs: list[dict[str, Any]], display_limit: int) -> str:
-    visible_runs = visible_history_runs(runs, display_limit)
-    latest = latest_runs_by_config(runs)
-    most_recent = runs[-1]
-    trend_series, trend_labels = history_chart_data(visible_runs)
-    concurrency_series, concurrency_labels = concurrency_chart_data(latest)
-    visible_run_count = len({run["run_id"] for run in visible_runs})
-
-    trend_svg = chart_svg(
-        trend_series,
-        trend_labels,
-        title=(
-            "DP8 vs PCP8 peak throughput over time — "
-            f"last {visible_run_count} runs"
-        ),
-        description=(
-            "Peak total token throughput for recent DP8 and PCP8 benchmark "
-            "runs, ordered by completion time."
-        ),
-        id_prefix="trend",
-        standalone=False,
-    )
-    concurrency_svg = chart_svg(
-        concurrency_series,
-        concurrency_labels,
-        title="Latest DP8 vs PCP8 throughput by concurrency",
-        description=(
-            "Total token throughput at each tested concurrency for the latest "
-            "successful DP8 and PCP8 benchmarks."
-        ),
-        id_prefix="concurrency",
-        standalone=False,
-    )
-
-    cards = []
-    for config, style in BENCHMARK_CONFIGS.items():
-        run = latest.get(config)
-        if run is None:
-            continue
-        config_runs = [item for item in runs if item["benchmark_config"] == config]
-        previous = config_runs[-2] if len(config_runs) > 1 else None
-        delta = None
-        if previous and previous["best_total_token_throughput"]:
-            delta = 100 * (
-                run["best_total_token_throughput"]
-                / previous["best_total_token_throughput"]
-                - 1
-            )
-        delta_text = (
-            "first recorded run" if delta is None else f"{delta:+.2f}% vs previous"
-        )
-        delta_class = (
-            "neutral" if delta is None else ("positive" if delta >= 0 else "negative")
-        )
-        cards.append(
-            '<div class="card">'
-            f'<div class="label">Latest {html.escape(str(style["label"]))} peak</div>'
-            f'<div class="metric">{run["best_total_token_throughput"]:,.2f}</div>'
-            f'<div class="note">c{run["best_concurrency"]} · '
-            f'{run["best_request_throughput"]:,.3f} req/s · '
-            f'<span class="{delta_class}">{html.escape(delta_text)}</span></div>'
-            "</div>"
-        )
-    cards.append(
-        '<div class="card"><div class="label">Recorded measurements</div>'
-        f'<div class="metric">{len(runs)}</div><div class="note">'
-        f'{len({run["run_id"] for run in runs})} benchmark runs</div></div>'
-    )
-
-    rows = []
-    for run in reversed(visible_runs):
-        rows.append(
-            "<tr>"
-            f"<td><code>{html.escape(run['run_id'])}</code></td>"
-            f"<td><strong>{html.escape(config_label(run['benchmark_config']))}</strong></td>"
-            f"<td>{html.escape(display_time(run['completed_at']))} UTC</td>"
-            f"<td class=number>{run['best_total_token_throughput']:,.2f}</td>"
-            f"<td class=number>{run['best_concurrency']}</td>"
-            f"<td class=number>{run['best_request_throughput']:,.3f}</td>"
-            f"<td class=number>{run['p99_ttft_ms']:,.1f}</td>"
-            f"<td><code>{html.escape(run['torch_tpu_version'])}</code></td>"
-            "</tr>"
-        )
-
-    generated_at = html.escape(str(max(run["completed_at"] for run in runs)))
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TPU benchmark throughput</title>
-  <style>
-    :root {{ color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }}
-    body {{ margin: 0; background: #f5f7fa; color: #102a43; }}
-    main {{ max-width: 1180px; margin: 0 auto; padding: 36px 22px 64px; }}
-    h1 {{ margin: 0 0 6px; font-size: clamp(28px, 4vw, 44px); }}
-    .subtitle {{ color: #627d98; margin: 0 0 28px; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }}
-    .card, .panel {{ background: white; border: 1px solid #d9e2ec; border-radius: 14px; box-shadow: 0 4px 18px #102a430d; }}
-    .card {{ padding: 20px; }}
-    .label {{ color: #627d98; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; }}
-    .metric {{ margin-top: 8px; font-size: 29px; font-weight: 750; }}
-    .note {{ margin-top: 7px; color: #486581; font-size: 14px; }}
-    .positive {{ color: #087443; }} .negative {{ color: #b42318; }} .neutral {{ color: #486581; }}
-    .panel {{ margin-top: 18px; padding: 16px; overflow-x: auto; }}
-    .panel svg {{ display: block; width: 100%; min-width: 680px; height: auto; }}
-    table {{ width: 100%; border-collapse: collapse; min-width: 900px; font-size: 14px; }}
-    th, td {{ padding: 11px 12px; border-bottom: 1px solid #e6edf3; text-align: left; }}
-    th {{ color: #486581; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
-    .number {{ text-align: right; font-variant-numeric: tabular-nums; }}
-    code {{ font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }}
-    footer {{ margin-top: 24px; color: #829ab1; font-size: 13px; }}
-  </style>
-</head>
-<body>
-<main>
-  <h1>TPU benchmark throughput</h1>
-  <p class="subtitle">Qwen3.5-397B-A17B-FP8 · dummy weights · input {most_recent['input_length']} / output {most_recent['output_length']} · DP8 vs PCP8</p>
-  <section class="cards">{''.join(cards)}</section>
-  <section class="panel">{trend_svg}</section>
-  <section class="panel">{concurrency_svg}</section>
-  <section class="panel">
-    <table>
-      <thead><tr><th>Run</th><th>Config</th><th>Completed</th><th class=number>Peak tok/s</th><th class=number>Concurrency</th><th class=number>Req/s</th><th class=number>p99 TTFT ms</th><th>torch_tpu</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-  </section>
-  <footer>Generated from <code>throughput_history.json</code>. Latest data timestamp: {generated_at}.</footer>
-</main>
-</body>
-</html>
-"""
-
-
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     latest = latest_runs_by_config(runs)
     latest_lines = []
@@ -833,13 +699,13 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             README_START,
             "Latest DP8 vs PCP8 throughput by concurrency:",
             "",
-            "[![Latest DP8 vs PCP8 throughput by concurrency]"
-            "(reports/throughput.svg)](reports/index.html)",
+            "![Latest DP8 vs PCP8 throughput by concurrency]"
+            "(reports/throughput.svg)",
             "",
             "Recent DP8 vs PCP8 peak throughput over time:",
             "",
-            "[![Recent DP8 vs PCP8 peak throughput over time]"
-            "(reports/throughput_history.svg)](reports/index.html)",
+            "![Recent DP8 vs PCP8 peak throughput over time]"
+            "(reports/throughput_history.svg)",
             "",
             *latest_lines,
             "",
@@ -881,7 +747,6 @@ def main() -> None:
     csv_path = reports_dir / "throughput_history.csv"
     svg_path = reports_dir / "throughput.svg"
     history_svg_path = reports_dir / "throughput_history.svg"
-    html_path = reports_dir / "index.html"
     readme_path = project_root / "README.md"
     lock_path = project_root / ".state" / "benchmark_report.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -935,7 +800,6 @@ def main() -> None:
                 id_prefix="history",
             ),
         )
-        atomic_write(html_path, render_html(runs, args.display_limit))
         update_readme(
             readme_path,
             render_readme_block(runs, args.table_limit),
@@ -946,7 +810,8 @@ def main() -> None:
         f"{record['best_total_token_throughput']:,.2f} tok/s "
         f"(run={record['run_id']}, concurrency={record['best_concurrency']})"
     )
-    print(f"Throughput dashboard: {html_path}")
+    print(f"Latest throughput chart: {svg_path}")
+    print(f"Throughput history chart: {history_svg_path}")
 
 
 if __name__ == "__main__":

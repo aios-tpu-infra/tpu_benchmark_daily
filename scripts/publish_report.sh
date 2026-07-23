@@ -10,7 +10,6 @@ REPORT_REMOTE="${REPORT_REMOTE:-origin}"
 REPORT_BRANCH="${REPORT_BRANCH:-main}"
 
 required_reports=(
-  index.html
   latest.json
   throughput.svg
   throughput_history.svg

@@ -174,6 +174,8 @@ class DualSeriesReportTest(unittest.TestCase):
 
         self.assertIn("reports/throughput.svg", block)
         self.assertIn("reports/throughput_history.svg", block)
+        self.assertNotIn("index.html", block)
+        self.assertNotIn("[![", block)
 
 
 if __name__ == "__main__":

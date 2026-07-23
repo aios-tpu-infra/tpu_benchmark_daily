@@ -9,11 +9,11 @@ TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-i
 <!-- BENCHMARK_REPORT_START -->
 Latest DP8 vs PCP8 throughput by concurrency:
 
-[![Latest DP8 vs PCP8 throughput by concurrency](reports/throughput.svg)](reports/index.html)
+![Latest DP8 vs PCP8 throughput by concurrency](reports/throughput.svg)
 
 Recent DP8 vs PCP8 peak throughput over time:
 
-[![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)](reports/index.html)
+![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)
 
 Latest successful DP8: **51,476.87 total tok/s** at concurrency **16** (`20260723T064547Z`).
 Latest successful PCP8: **34,276.38 total tok/s** at concurrency **32** (`20260723T064547Z`).
@@ -47,7 +47,7 @@ The charts compare the latest successful DP8 and PCP8 throughput across concurre
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
-- `reports/`: durable peak-throughput history, README charts, and static dashboard.
+- `reports/`: durable peak-throughput history and generated SVG charts.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
@@ -101,21 +101,17 @@ keeps the final PCP8 server alive.
 
 After every successful full benchmark, the runner records the highest
 `total_token_throughput` separately for DP8 and PCP8, regenerates the concurrency
-comparison, time-series chart, and dashboard, then commits `README.md` and
-`reports/` once and pushes that commit directly to `origin/main`. The GitHub
-repository homepage therefore shows both comparisons without a separate web
-service. Set `PUBLISH_REPORTS=0` to disable commit and push for a local-only run.
+and time-series SVG charts, then commits `README.md` and `reports/` once and
+pushes that commit directly to `origin/main`. The GitHub repository homepage
+therefore shows both charts without HTML or a separate web service. Set
+`PUBLISH_REPORTS=0` to disable commit and push for a local-only run.
 
 The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
-Open the full local dashboard directly with a browser, or serve it locally:
-
-```bash
-python3 -m http.server 8000 --directory reports
-```
-
-Then visit `http://127.0.0.1:8000/`. Automatic publication uses the repository's
-configured Git SSH credentials. It refuses to run when `main` differs from the
-remote, the index is not empty, or unrelated project files are modified. The
+The generated images are `reports/throughput.svg` and
+`reports/throughput_history.svg`; every successful report update replaces both
+files atomically. Automatic publication uses the repository's configured Git
+SSH credentials. It refuses to run when `main` differs from the remote, the
+index is not empty, or unrelated project files are modified. The
 `vllm-torchtpu` submodule pointer may be modified by its daily update, but it is
 never included in the generated-report commit.
 

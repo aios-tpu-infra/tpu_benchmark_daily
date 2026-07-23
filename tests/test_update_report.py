@@ -23,6 +23,8 @@ def make_run(
     run_id: str = "20260722T180001Z",
     completed_at: str = "2026-07-22T18:20:00+00:00",
     throughput: float = 40_000.0,
+    decode_throughput: float | None = None,
+    decode_min_tpot_ms: float | None = None,
 ) -> dict[str, object]:
     return {
         "run_id": run_id,
@@ -38,7 +40,9 @@ def make_run(
         "best_concurrency": 2,
         "mean_ttft_ms": 100.0,
         "p99_ttft_ms": 200.0,
-        "torchtpu_vllm_revision": "abc123",
+        "decode_peak_output_throughput": decode_throughput,
+        "decode_min_tpot_ms": decode_min_tpot_ms,
+        "torchtpu_vllm_revision": "abc123def4567890",
         "torch_tpu_revision": "",
         "torch_tpu_version": "1.0",
         "summary_path": f"runs/{run_id}/results/{config}/summary.json",
@@ -81,6 +85,10 @@ class HistoryMigrationTest(unittest.TestCase):
         self.assertEqual(
             [run["benchmark_config"] for run in runs], ["dp8", "pcp8"]
         )
+        self.assertTrue(
+            all(run["decode_peak_output_throughput"] is None for run in runs)
+        )
+        self.assertTrue(all(run["decode_min_tpot_ms"] is None for run in runs))
 
     def test_same_run_id_keeps_both_benchmark_configs(self) -> None:
         dp_run = make_run("dp8")
@@ -132,7 +140,7 @@ class DualSeriesReportTest(unittest.TestCase):
     def test_latest_json_contains_both_configs(self) -> None:
         payload = json.loads(REPORT.render_latest_json(self.runs))
 
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(set(payload["benchmarks"]), {"dp8", "pcp8"})
         self.assertEqual(
             payload["benchmarks"]["pcp8"]["total_token_throughput"], 35_000.0
@@ -182,6 +190,36 @@ class DualSeriesReportTest(unittest.TestCase):
         self.assertIn("reports/throughput_history.svg", block)
         self.assertNotIn("index.html", block)
         self.assertNotIn("[![", block)
+
+    def test_readme_table_combines_dp_and_pcp_for_one_run(self) -> None:
+        self.runs[0]["decode_peak_output_throughput"] = 637.685
+        self.runs[0]["decode_min_tpot_ms"] = 20.507
+
+        block = REPORT.render_readme_block(self.runs, table_limit=10)
+
+        self.assertIn("| vllm-torchtpu commit | Test time (UTC) |", block)
+        self.assertIn(
+            "| `abc123def456` | 2026-07-22 18:40 | 40,000.00 | "
+            "35,000.00 | 637.68 | 20.51 |",
+            block,
+        )
+        self.assertNotIn("| Completed (UTC) | Config |", block)
+        self.assertEqual(block.count("| `abc123def456` |"), 1)
+
+    def test_decode_metrics_reads_valid_dp_summary_only(self) -> None:
+        summary = {
+            "decode_sliding_window": {
+                "best": {"output_throughput": 637.685},
+                "aggregate": {"request_tpot_ms": {"min": 20.507}},
+            }
+        }
+
+        self.assertEqual(
+            REPORT.decode_metrics(summary, "dp8"),
+            (637.685, 20.507),
+        )
+        self.assertEqual(REPORT.decode_metrics(summary, "pcp8"), (None, None))
+        self.assertEqual(REPORT.decode_metrics({}, "dp8"), (None, None))
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 BENCHMARK_CONFIGS = {
@@ -42,6 +42,8 @@ CSV_FIELDS = (
     "best_concurrency",
     "mean_ttft_ms",
     "p99_ttft_ms",
+    "decode_peak_output_throughput",
+    "decode_min_tpot_ms",
     "torchtpu_vllm_revision",
     "torch_tpu_revision",
     "torch_tpu_version",
@@ -96,6 +98,12 @@ def finite_float(value: Any, field: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"{field} must be finite, got {value!r}")
     return result
+
+
+def optional_finite_float(value: Any, field: str) -> float | None:
+    if value is None or value == "":
+        return None
+    return finite_float(value, field)
 
 
 def positive_int(value: Any, field: str) -> int:
@@ -198,6 +206,31 @@ def config_label(config: str) -> str:
     return str(BENCHMARK_CONFIGS[config]["label"])
 
 
+def decode_metrics(
+    summary: dict[str, Any], benchmark_config: str
+) -> tuple[float | None, float | None]:
+    if benchmark_config != "dp8":
+        return None, None
+
+    decode = summary.get("decode_sliding_window")
+    if not isinstance(decode, dict) or not isinstance(decode.get("best"), dict):
+        return None, None
+
+    best = decode["best"]
+    aggregate = decode.get("aggregate")
+    request_tpot = (
+        aggregate.get("request_tpot_ms") if isinstance(aggregate, dict) else None
+    )
+    peak_output_throughput = optional_finite_float(
+        best.get("output_throughput"), "decode_peak_output_throughput"
+    )
+    min_tpot_ms = optional_finite_float(
+        request_tpot.get("min") if isinstance(request_tpot, dict) else None,
+        "decode_min_tpot_ms",
+    )
+    return peak_output_throughput, min_tpot_ms
+
+
 def build_record(
     *,
     project_root: Path,
@@ -234,6 +267,9 @@ def build_record(
         or infer_legacy_benchmark_config(
             {"run_id": run_dir.name, "summary_path": str(summary_path)}
         )
+    )
+    decode_peak_output_throughput, decode_min_tpot_ms = decode_metrics(
+        summary, benchmark_config
     )
 
     input_length = (
@@ -310,6 +346,8 @@ def build_record(
         "best_concurrency": positive_int(best["concurrency"], "best_concurrency"),
         "mean_ttft_ms": finite_float(best["mean_ttft_ms"], "mean_ttft_ms"),
         "p99_ttft_ms": finite_float(best["p99_ttft_ms"], "p99_ttft_ms"),
+        "decode_peak_output_throughput": decode_peak_output_throughput,
+        "decode_min_tpot_ms": decode_min_tpot_ms,
         "torchtpu_vllm_revision": str(
             metadata.get("torchtpu_vllm_revision", "unknown")
         ),
@@ -328,7 +366,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, SCHEMA_VERSION):
+    if schema_version not in (1, 2, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -339,6 +377,13 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         run["machine_ip"] = normalized_ip_address(run.get("machine_ip"))
         run["benchmark_config"] = normalize_benchmark_config(
             run.get("benchmark_config") or infer_legacy_benchmark_config(run)
+        )
+        run["decode_peak_output_throughput"] = optional_finite_float(
+            run.get("decode_peak_output_throughput"),
+            "decode_peak_output_throughput",
+        )
+        run["decode_min_tpot_ms"] = optional_finite_float(
+            run.get("decode_min_tpot_ms"), "decode_min_tpot_ms"
         )
     return runs
 
@@ -648,6 +693,10 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "concurrency": run["best_concurrency"],
         "mean_ttft_ms": run["mean_ttft_ms"],
         "p99_ttft_ms": run["p99_ttft_ms"],
+        "decode_peak_output_throughput": run.get(
+            "decode_peak_output_throughput"
+        ),
+        "decode_min_tpot_ms": run.get("decode_min_tpot_ms"),
         "torchtpu_vllm_revision": run["torchtpu_vllm_revision"],
         "torch_tpu_revision": run["torch_tpu_revision"],
         "torch_tpu_version": run["torch_tpu_version"],
@@ -671,8 +720,44 @@ def render_csv(runs: list[dict[str, Any]]) -> str:
     writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, lineterminator="\n")
     writer.writeheader()
     for run in runs:
-        writer.writerow({field: run[field] for field in CSV_FIELDS})
+        writer.writerow({field: run.get(field, "") for field in CSV_FIELDS})
     return output.getvalue()
+
+
+def report_table_runs(
+    runs: list[dict[str, Any]], table_limit: int
+) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        run_id = str(run["run_id"])
+        row = grouped.setdefault(
+            run_id,
+            {
+                "run_id": run_id,
+                "completed_at": run["completed_at"],
+                "torchtpu_vllm_revision": "unknown",
+                "configs": {},
+            },
+        )
+        if run["completed_at"] > row["completed_at"]:
+            row["completed_at"] = run["completed_at"]
+        revision = str(run.get("torchtpu_vllm_revision") or "unknown")
+        if revision != "unknown":
+            row["torchtpu_vllm_revision"] = revision
+        row["configs"][run["benchmark_config"]] = run
+
+    ordered = sorted(
+        grouped.values(),
+        key=lambda row: (row["completed_at"], row["run_id"]),
+        reverse=True,
+    )
+    return ordered[:table_limit]
+
+
+def table_metric(value: Any, *, decimals: int = 2) -> str:
+    if value is None or value == "":
+        return "—"
+    return f"{finite_float(value, 'table metric'):,.{decimals}f}"
 
 
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
@@ -689,14 +774,26 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             f"(`{run['run_id']}`)."
         )
     rows = []
-    for run in reversed(runs[-table_limit:]):
+    for grouped_run in report_table_runs(runs, table_limit):
+        dp_run = grouped_run["configs"].get("dp8")
+        pcp_run = grouped_run["configs"].get("pcp8")
+        revision = grouped_run["torchtpu_vllm_revision"]
+        revision_display = f"`{revision[:12]}`" if revision != "unknown" else "—"
+        dp_prefill = dp_run.get("best_total_token_throughput") if dp_run else None
+        pcp_prefill = (
+            pcp_run.get("best_total_token_throughput") if pcp_run else None
+        )
+        dp_decode = (
+            dp_run.get("decode_peak_output_throughput") if dp_run else None
+        )
+        dp_min_tpot = dp_run.get("decode_min_tpot_ms") if dp_run else None
         rows.append(
-            f"| {display_time(run['completed_at'])} | "
-            f"{config_label(run['benchmark_config'])} | "
-            f"{run['best_total_token_throughput']:,.2f} | "
-            f"{run['best_concurrency']} | "
-            f"{run['best_request_throughput']:,.3f} | "
-            f"{run['p99_ttft_ms']:,.1f} |"
+            f"| {revision_display} | "
+            f"{display_time(grouped_run['completed_at'])} | "
+            f"{table_metric(dp_prefill)} | "
+            f"{table_metric(pcp_prefill)} | "
+            f"{table_metric(dp_decode)} | "
+            f"{table_metric(dp_min_tpot)} |"
         )
 
     return "\n".join(
@@ -714,7 +811,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "",
             *latest_lines,
             "",
-            "| Completed (UTC) | Config | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |",
+            "| vllm-torchtpu commit | Test time (UTC) | "
+            "DP peak prefill tok/s | PCP peak prefill tok/s | "
+            "DP peak decode tok/s | DP min TPOT (ms) |",
             "|---|---|---:|---:|---:|---:|",
             *rows,
             "",

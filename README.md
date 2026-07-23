@@ -18,18 +18,18 @@ Recent DP8 vs PCP8 peak throughput over time:
 Latest successful DP8: **51,476.87 total tok/s** at concurrency **16** (`20260723T064547Z`).
 Latest successful PCP8: **34,276.38 total tok/s** at concurrency **32** (`20260723T064547Z`).
 
-| Completed (UTC) | Config | Peak total tok/s | Best concurrency | Requests/s | p99 TTFT (ms) |
+| vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP peak decode tok/s | DP min TPOT (ms) |
 |---|---|---:|---:|---:|---:|
-| 2026-07-23 07:39 | PCP8 | 34,276.38 | 32 | 4.184 | 8,561.5 |
-| 2026-07-23 07:16 | DP8 | 51,476.87 | 16 | 6.283 | 3,400.9 |
-| 2026-07-22 08:26 | DP8 | 48,359.05 | 32 | 5.902 | 6,359.9 |
-| 2026-07-22 05:17 | PCP8 | 34,296.71 | 16 | 4.186 | 4,883.4 |
-| 2026-07-22 02:28 | DP8 | 46,240.26 | 16 | 5.644 | 3,738.4 |
-| 2026-07-21 18:39 | DP8 | 40,378.43 | 64 | 4.928 | 12,381.2 |
-| 2026-07-20 18:16 | DP8 | 43,690.58 | 64 | 5.333 | 11,976.0 |
-| 2026-07-19 18:16 | DP8 | 44,436.44 | 64 | 5.424 | 11,778.4 |
-| 2026-07-18 18:17 | DP8 | 44,397.93 | 64 | 5.419 | 11,780.6 |
-| 2026-07-18 00:01 | DP8 | 44,371.29 | 64 | 5.416 | 11,793.6 |
+| `a03d8effc78a` | 2026-07-23 07:39 | 51,476.87 | 34,276.38 | 637.69 | 20.51 |
+| — | 2026-07-22 08:26 | 48,359.05 | — | — | — |
+| `db5ae0ab3941` | 2026-07-22 05:17 | — | 34,296.71 | — | — |
+| `db5ae0ab3941` | 2026-07-22 02:28 | 46,240.26 | — | — | — |
+| `db0149493e41` | 2026-07-21 18:39 | 40,378.43 | — | — | — |
+| `a2bdc585f7f8` | 2026-07-20 18:16 | 43,690.58 | — | — | — |
+| `d296ce153cdd` | 2026-07-19 18:16 | 44,436.44 | — | — | — |
+| `d296ce153cdd` | 2026-07-18 18:17 | 44,397.93 | — | — | — |
+| `2838d74ab880` | 2026-07-18 00:01 | 44,371.29 | — | — | — |
+| `47acb3a9ce31` | 2026-07-17 09:18 | 49,360.61 | — | — | — |
 
 The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

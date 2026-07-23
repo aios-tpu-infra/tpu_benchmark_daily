@@ -4,6 +4,8 @@
       "benchmark_config": "dp8",
       "completed_at": "2026-07-23T07:16:56+00:00",
       "concurrency": 16,
+      "decode_min_tpot_ms": 20.507219412704643,
+      "decode_peak_output_throughput": 637.6851851851852,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2453.502184906938,
@@ -21,6 +23,8 @@
       "benchmark_config": "pcp8",
       "completed_at": "2026-07-23T07:39:30+00:00",
       "concurrency": 32,
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6774.874276477021,
@@ -35,6 +39,6 @@
       "total_token_throughput": 34276.38029463047
     }
   },
-  "schema_version": 2,
+  "schema_version": 3,
   "updated_at": "2026-07-23T07:39:30+00:00"
 }

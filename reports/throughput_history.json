@@ -57,6 +57,8 @@
           "total_token_throughput": 49381.83103775198
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6295.275573735125,
@@ -127,6 +129,8 @@
           "total_token_throughput": 49372.29309639097
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6292.118382436456,
@@ -197,6 +201,8 @@
           "total_token_throughput": 49360.61444160256
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6310.011965862941,
@@ -267,6 +273,8 @@
           "total_token_throughput": 44371.29208413848
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6999.24348013883,
@@ -337,6 +345,8 @@
           "total_token_throughput": 44397.925012023195
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6984.199464359449,
@@ -407,6 +417,8 @@
           "total_token_throughput": 44436.44289640972
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6981.610803406234,
@@ -477,6 +489,8 @@
           "total_token_throughput": 43690.577693431354
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 7096.706042719006,
@@ -547,6 +561,8 @@
           "total_token_throughput": 40378.43035915213
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 7104.1095279529145,
@@ -617,6 +633,8 @@
           "total_token_throughput": 46119.21726680975
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2731.707107438069,
@@ -687,6 +705,8 @@
           "total_token_throughput": 34201.46993504954
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 3615.183541905026,
@@ -757,6 +777,8 @@
           "total_token_throughput": 48303.34590325933
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 4904.060522997497,
@@ -827,6 +849,8 @@
           "total_token_throughput": 49045.934164908096
         }
       ],
+      "decode_min_tpot_ms": 20.507219412704643,
+      "decode_peak_output_throughput": 637.6851851851852,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2453.502184906938,
@@ -897,6 +921,8 @@
           "total_token_throughput": 34170.019084331434
         }
       ],
+      "decode_min_tpot_ms": null,
+      "decode_peak_output_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6774.874276477021,
@@ -911,6 +937,6 @@
       "torchtpu_vllm_revision": "a03d8effc78a327d3cb365461ef040be20581cc3"
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "updated_at": "2026-07-23T07:39:30+00:00"
 }

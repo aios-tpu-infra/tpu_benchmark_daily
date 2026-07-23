@@ -20,16 +20,16 @@ Latest successful PCP8: **34,276.38 total tok/s** at concurrency **32** (`202607
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP peak decode tok/s | DP min TPOT (ms) |
 |---|---|---:|---:|---:|---:|
-| `a03d8effc78a` | 2026-07-23 07:39 | 51,476.87 | 34,276.38 | 637.69 | 20.51 |
-| — | 2026-07-22 08:26 | 48,359.05 | — | — | — |
-| `db5ae0ab3941` | 2026-07-22 05:17 | — | 34,296.71 | — | — |
-| `db5ae0ab3941` | 2026-07-22 02:28 | 46,240.26 | — | — | — |
-| `db0149493e41` | 2026-07-21 18:39 | 40,378.43 | — | — | — |
-| `a2bdc585f7f8` | 2026-07-20 18:16 | 43,690.58 | — | — | — |
-| `d296ce153cdd` | 2026-07-19 18:16 | 44,436.44 | — | — | — |
-| `d296ce153cdd` | 2026-07-18 18:17 | 44,397.93 | — | — | — |
-| `2838d74ab880` | 2026-07-18 00:01 | 44,371.29 | — | — | — |
-| `47acb3a9ce31` | 2026-07-17 09:18 | 49,360.61 | — | — | — |
+| `a03d8effc78a` | 2026-07-23 06:45 | 51,476.87 | 34,276.38 | 637.69 | 20.51 |
+| — | 2026-07-22 08:15 | 48,359.05 | — | — | — |
+| `db5ae0ab3941` | 2026-07-22 05:07 | — | 34,296.71 | — | — |
+| `db5ae0ab3941` | 2026-07-22 01:40 | 46,240.26 | — | — | — |
+| `db0149493e41` | 2026-07-21 18:00 | 40,378.43 | — | — | — |
+| `a2bdc585f7f8` | 2026-07-20 18:00 | 43,690.58 | — | — | — |
+| `d296ce153cdd` | 2026-07-19 18:00 | 44,436.44 | — | — | — |
+| `d296ce153cdd` | 2026-07-18 18:00 | 44,397.93 | — | — | — |
+| `2838d74ab880` | 2026-07-17 23:44 | 44,371.29 | — | — | — |
+| `47acb3a9ce31` | 2026-07-17 09:08 | 49,360.61 | — | — | — |
 
 The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
@@ -98,6 +98,10 @@ run therefore contains three benchmark groups: DP8 decode, DP8 prefill, and
 PCP8 prefill. Servers are stopped after the benchmark by default. Use
 `--keep-server-running` only for interactive debugging; when successful, it
 keeps the final PCP8 server alive.
+
+The three benchmark groups share one run ID and one workflow start timestamp.
+The homepage combines them into one table row and uses that shared start time
+for `Test time (UTC)`.
 
 After every successful full benchmark, the runner records the highest
 `total_token_throughput` separately for DP8 and PCP8, regenerates the concurrency

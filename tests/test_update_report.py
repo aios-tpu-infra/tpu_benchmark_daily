@@ -199,7 +199,7 @@ class DualSeriesReportTest(unittest.TestCase):
 
         self.assertIn("| vllm-torchtpu commit | Test time (UTC) |", block)
         self.assertIn(
-            "| `abc123def456` | 2026-07-22 18:40 | 40,000.00 | "
+            "| `abc123def456` | 2026-07-22 18:00 | 40,000.00 | "
             "35,000.00 | 637.68 | 20.51 |",
             block,
         )

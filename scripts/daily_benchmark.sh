@@ -333,11 +333,16 @@ stop_existing_server() {
 }
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+benchmark_started_at="$(
+  printf '%s-%s-%sT%s:%s:%s+00:00' \
+    "${timestamp:0:4}" "${timestamp:4:2}" "${timestamp:6:2}" \
+    "${timestamp:9:2}" "${timestamp:11:2}" "${timestamp:13:2}"
+)"
 RUN_DIR="$PROJECT_ROOT/runs/$timestamp"
 mkdir -p "$RUN_DIR"
 exec > >(tee -a "$RUN_DIR/job.log") 2>&1
 
-echo "Daily TPU benchmark started at $(date -u --iso-8601=seconds)"
+echo "Daily TPU benchmark started at $benchmark_started_at"
 echo "Project root: $PROJECT_ROOT"
 echo "Run directory: $RUN_DIR"
 echo "Machine IP: $MACHINE_IP"
@@ -378,7 +383,7 @@ PY
 
 cat > "$RUN_DIR/run_metadata.json" <<EOF
 {
-  "started_at": "$(date -u --iso-8601=seconds)",
+  "started_at": "$benchmark_started_at",
   "machine_ip": "$MACHINE_IP",
   "torchtpu_vllm_revision": "$source_revision",
   "torch_tpu_version": "$torch_tpu_version",

@@ -734,13 +734,14 @@ def report_table_runs(
             run_id,
             {
                 "run_id": run_id,
-                "completed_at": run["completed_at"],
+                "started_at": run.get("started_at") or run["completed_at"],
                 "torchtpu_vllm_revision": "unknown",
                 "configs": {},
             },
         )
-        if run["completed_at"] > row["completed_at"]:
-            row["completed_at"] = run["completed_at"]
+        started_at = run.get("started_at") or run["completed_at"]
+        if started_at < row["started_at"]:
+            row["started_at"] = started_at
         revision = str(run.get("torchtpu_vllm_revision") or "unknown")
         if revision != "unknown":
             row["torchtpu_vllm_revision"] = revision
@@ -748,7 +749,7 @@ def report_table_runs(
 
     ordered = sorted(
         grouped.values(),
-        key=lambda row: (row["completed_at"], row["run_id"]),
+        key=lambda row: (row["started_at"], row["run_id"]),
         reverse=True,
     )
     return ordered[:table_limit]
@@ -789,7 +790,7 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         dp_min_tpot = dp_run.get("decode_min_tpot_ms") if dp_run else None
         rows.append(
             f"| {revision_display} | "
-            f"{display_time(grouped_run['completed_at'])} | "
+            f"{display_time(grouped_run['started_at'])} | "
             f"{table_metric(dp_prefill)} | "
             f"{table_metric(pcp_prefill)} | "
             f"{table_metric(dp_decode)} | "

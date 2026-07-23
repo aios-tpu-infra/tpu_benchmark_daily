@@ -43,9 +43,9 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
 
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
-.venv, then benchmarks DP8 and PCP8 servers in sequence. Both configurations
-run the decode and prefill suites. Reports are generated after each suite and
-published once after both configurations succeed.
+.venv, then benchmarks DP8 and PCP8 servers in sequence. DP8 runs the decode
+and prefill suites; PCP8 runs the prefill suite only. Reports are generated
+after each prefill suite and published once after both configurations succeed.
 EOF
 }
 
@@ -482,22 +482,27 @@ start_server() {
 
 run_benchmark_suite() {
   local benchmark_config=$1
+  local run_decode=$2
   local result_dir="$RUN_DIR/results/$benchmark_config"
 
   mkdir -p "$result_dir"
-  echo "Running $benchmark_config decode benchmark..."
-  "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
-    --base-url "http://127.0.0.1:$PORT" \
-    --model Qwen3.5-397B-A17B-FP8 \
-    --output-dir "$result_dir/decode_sliding_window" \
-    --concurrency 16 \
-    --prefill-tokens 65536 \
-    --decode-tokens 4096 \
-    --tokenizer-dir "$MODEL_DIR" \
-    --rounds 3 \
-    --window-seconds 5 \
-    --step-seconds 1 \
-    2>&1 | tee "$RUN_DIR/${benchmark_config}_decode_benchmark.log"
+  if (( run_decode )); then
+    echo "Running $benchmark_config decode benchmark..."
+    "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
+      --base-url "http://127.0.0.1:$PORT" \
+      --model Qwen3.5-397B-A17B-FP8 \
+      --output-dir "$result_dir/decode_sliding_window" \
+      --concurrency 16 \
+      --prefill-tokens 65536 \
+      --decode-tokens 4096 \
+      --tokenizer-dir "$MODEL_DIR" \
+      --rounds 3 \
+      --window-seconds 5 \
+      --step-seconds 1 \
+      2>&1 | tee "$RUN_DIR/${benchmark_config}_decode_benchmark.log"
+  else
+    echo "Skipping $benchmark_config decode benchmark; decode is measured only for DP8."
+  fi
 
   echo "Running $benchmark_config prefill benchmark..."
   BENCHMARK_CONFIG="$benchmark_config" PUBLISH_REPORTS=0 \
@@ -517,11 +522,11 @@ trap stop_server EXIT
 trap on_signal INT TERM
 
 start_server dp8 "$SCRIPT_DIR/start_dp_server.sh"
-run_benchmark_suite dp8
+run_benchmark_suite dp8 1
 stop_server
 
 start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh"
-run_benchmark_suite pcp8
+run_benchmark_suite pcp8 0
 
 if (( PUBLISH_REPORTS )); then
   "$SCRIPT_DIR/publish_report.sh"

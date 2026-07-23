@@ -93,9 +93,11 @@ group. A non-vLLM process on that port is never killed and causes the job to
 fail safely. `--prepare-only` leaves any running service untouched.
 
 The runner first starts DP8 and executes the decode and prefill suites, stops
-that server, then repeats both suites with PCP8. Servers are stopped after the
-benchmark by default. Use `--keep-server-running` only for interactive
-debugging; when successful, it keeps the final PCP8 server alive.
+that server, then starts PCP8 and executes the prefill suite only. The complete
+run therefore contains three benchmark groups: DP8 decode, DP8 prefill, and
+PCP8 prefill. Servers are stopped after the benchmark by default. Use
+`--keep-server-running` only for interactive debugging; when successful, it
+keeps the final PCP8 server alive.
 
 After every successful full benchmark, the runner records the highest
 `total_token_throughput` separately for DP8 and PCP8, regenerates the concurrency

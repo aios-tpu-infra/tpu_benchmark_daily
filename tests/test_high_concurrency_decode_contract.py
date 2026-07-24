@@ -5,6 +5,7 @@ import unittest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DECODE_SERVER = PROJECT_ROOT / "scripts" / "start_dp_decode_server.sh"
 DAILY_RUNNER = PROJECT_ROOT / "scripts" / "daily_benchmark.sh"
+PREFILL_BENCHMARK = PROJECT_ROOT / "scripts" / "bench_all.sh"
 
 
 class HighConcurrencyDecodeServiceContractTest(unittest.TestCase):
@@ -66,6 +67,28 @@ class HighConcurrencyDecodeServiceContractTest(unittest.TestCase):
         self.assertIn("--step-seconds 1", script)
         self.assertNotIn("--concurrency 16", script)
         self.assertNotIn("--decode-tokens 4096", script)
+
+    def test_decode_results_are_a_peer_of_prefill_results(self) -> None:
+        daily_runner = DAILY_RUNNER.read_text(encoding="utf-8")
+        prefill_benchmark = PREFILL_BENCHMARK.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'local result_dir="$RUN_DIR/results/dp8_decode_c256"',
+            daily_runner,
+        )
+        self.assertIn('--output-dir "$result_dir"', daily_runner)
+        self.assertNotIn(
+            '--output-dir "$result_dir/decode_sliding_window"',
+            daily_runner,
+        )
+        self.assertIn(
+            'decode_summary="$RUN_DIR/results/dp8_decode_c256/summary.json"',
+            prefill_benchmark,
+        )
+        self.assertIn(
+            'report_args+=(--decode-summary "$decode_summary")',
+            prefill_benchmark,
+        )
 
 
 if __name__ == "__main__":

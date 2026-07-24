@@ -143,12 +143,6 @@ summary = {
     "best": best,
     "results": records,
 }
-decode_summary_path = os.path.join(
-    result_dir, "decode_sliding_window", "summary.json"
-)
-if os.path.isfile(decode_summary_path):
-    with open(decode_summary_path, encoding="utf-8") as handle:
-        summary["decode_sliding_window"] = json.load(handle)
 summary_path = os.path.join(result_dir, "summary.json")
 with open(summary_path, "w", encoding="utf-8") as handle:
     json.dump(summary, handle, indent=2, sort_keys=True)
@@ -164,14 +158,22 @@ if failed:
     raise SystemExit(f"Benchmark completed with {failed} failed requests.")
 PY
 
-"$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
-  --project-root "$PROJECT_ROOT" \
-  --run-dir "$RUN_DIR" \
-  --summary "$RESULT_DIR/summary.json" \
-  --benchmark-config "$BENCHMARK_CONFIG" \
-  --input-length "$INPUT_LEN" \
-  --output-length "$OUTPUT_LEN" \
+report_args=(
+  --project-root "$PROJECT_ROOT"
+  --run-dir "$RUN_DIR"
+  --summary "$RESULT_DIR/summary.json"
+  --benchmark-config "$BENCHMARK_CONFIG"
+  --input-length "$INPUT_LEN"
+  --output-length "$OUTPUT_LEN"
   --model "$SERVED_MODEL_NAME"
+)
+decode_summary="$RUN_DIR/results/dp8_decode_c256/summary.json"
+if [[ "$BENCHMARK_CONFIG" == "dp8" && -f "$decode_summary" ]]; then
+  report_args+=(--decode-summary "$decode_summary")
+fi
+
+"$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
+  "${report_args[@]}"
 
 if (( PUBLISH_REPORTS )); then
   "$SCRIPT_DIR/publish_report.sh"

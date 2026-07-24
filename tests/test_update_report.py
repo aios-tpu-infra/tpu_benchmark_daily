@@ -206,8 +206,23 @@ class DualSeriesReportTest(unittest.TestCase):
         self.assertNotIn("| Completed (UTC) | Config |", block)
         self.assertEqual(block.count("| `abc123def456` |"), 1)
 
-    def test_decode_metrics_reads_valid_dp_summary_only(self) -> None:
-        summary = {
+    def test_decode_metrics_reads_standalone_summary_for_dp_only(self) -> None:
+        decode_summary = {
+            "best": {"output_throughput": 637.685},
+            "aggregate": {"request_tpot_ms": {"min": 20.507}},
+        }
+
+        self.assertEqual(
+            REPORT.decode_metrics({}, "dp8", decode_summary),
+            (637.685, 20.507),
+        )
+        self.assertEqual(
+            REPORT.decode_metrics({}, "pcp8", decode_summary),
+            (None, None),
+        )
+
+    def test_decode_metrics_keeps_legacy_nested_summary_compatible(self) -> None:
+        legacy_summary = {
             "decode_sliding_window": {
                 "best": {"output_throughput": 637.685},
                 "aggregate": {"request_tpot_ms": {"min": 20.507}},
@@ -215,10 +230,9 @@ class DualSeriesReportTest(unittest.TestCase):
         }
 
         self.assertEqual(
-            REPORT.decode_metrics(summary, "dp8"),
+            REPORT.decode_metrics(legacy_summary, "dp8"),
             (637.685, 20.507),
         )
-        self.assertEqual(REPORT.decode_metrics(summary, "pcp8"), (None, None))
         self.assertEqual(REPORT.decode_metrics({}, "dp8"), (None, None))
 
 

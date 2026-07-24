@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project-root", type=Path, default=script_root)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument("--decode-summary", type=Path)
     parser.add_argument("--benchmark-config")
     parser.add_argument("--input-length", type=int)
     parser.add_argument("--output-length", type=int)
@@ -207,12 +208,18 @@ def config_label(config: str) -> str:
 
 
 def decode_metrics(
-    summary: dict[str, Any], benchmark_config: str
+    summary: dict[str, Any],
+    benchmark_config: str,
+    decode_summary: dict[str, Any] | None = None,
 ) -> tuple[float | None, float | None]:
     if benchmark_config != "dp8":
         return None, None
 
-    decode = summary.get("decode_sliding_window")
+    decode = (
+        decode_summary
+        if decode_summary is not None
+        else summary.get("decode_sliding_window")
+    )
     if not isinstance(decode, dict) or not isinstance(decode.get("best"), dict):
         return None, None
 
@@ -240,6 +247,7 @@ def build_record(
     output_length: int | None,
     model: str | None,
     benchmark_config: str | None,
+    decode_summary_path: Path | None = None,
 ) -> dict[str, Any]:
     summary = load_json(summary_path)
     best = summary.get("best")
@@ -268,8 +276,11 @@ def build_record(
             {"run_id": run_dir.name, "summary_path": str(summary_path)}
         )
     )
+    decode_summary = (
+        load_json(decode_summary_path) if decode_summary_path is not None else None
+    )
     decode_peak_output_throughput, decode_min_tpot_ms = decode_metrics(
-        summary, benchmark_config
+        summary, benchmark_config, decode_summary
     )
 
     input_length = (
@@ -866,6 +877,11 @@ def main() -> None:
             output_length=args.output_length,
             model=args.model,
             benchmark_config=args.benchmark_config,
+            decode_summary_path=(
+                args.decode_summary.resolve()
+                if args.decode_summary is not None
+                else None
+            ),
         )
         runs = update_history(load_history(history_path), record)
         latest = latest_runs_by_config(runs)

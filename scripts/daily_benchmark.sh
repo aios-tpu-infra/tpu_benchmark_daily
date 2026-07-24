@@ -504,13 +504,13 @@ start_server() {
 }
 
 run_decode_benchmark() {
-  local result_dir="$RUN_DIR/results/dp8"
+  local result_dir="$RUN_DIR/results/dp8_decode_c256"
   mkdir -p "$result_dir"
   echo "Running real-weight DP8 C256 decode benchmark..."
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
     --base-url "http://127.0.0.1:$PORT" \
     --model Qwen3.5-397B-A17B-FP8 \
-    --output-dir "$result_dir/decode_sliding_window" \
+    --output-dir "$result_dir" \
     --concurrency 256 \
     --data-parallel-size 8 \
     --prefill-tokens 65536 \

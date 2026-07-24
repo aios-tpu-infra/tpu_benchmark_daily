@@ -793,6 +793,7 @@ def main() -> None:
         "schema_version": 3,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
+            "benchmark_config": "dp8_decode_c256",
             "base_url": base_url,
             "model": args.model,
             "input_length": args.prefill_tokens,

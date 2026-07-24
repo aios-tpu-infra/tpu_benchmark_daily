@@ -208,22 +208,18 @@ def completion_token_delta(
 
 
 def iter_sse_data(response: requests.Response) -> Iterator[str]:
-    """Yield SSE data without reading a potentially huge event byte by byte."""
-    response.raw.decode_content = True
-    while raw_line := response.raw.readline():
-        if not raw_line.startswith(b"data: "):
+    for line in response.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
             continue
-        yield raw_line[len(b"data: ") :].rstrip(b"\r\n").decode("utf-8")
+        yield line[len("data: ") :]
 
 
 def streamed_completion(
     *,
     request_id: int,
     endpoint: str,
-    request_body: bytes,
+    request_payload: dict[str, Any],
     data_parallel_rank: int,
-    barrier_group: str,
-    barrier_size: int,
     timeout_s: float,
 ) -> RequestResult:
     started_s = time.perf_counter()
@@ -233,17 +229,10 @@ def streamed_completion(
     try:
         with requests.post(
             endpoint,
-            data=request_body,
-            headers={
-                "Accept": "text/event-stream",
-                "Content-Type": "application/json",
-                "X-data-parallel-rank": str(data_parallel_rank),
-                "X-AIOS-DECODE-BARRIER": barrier_group,
-                "X-AIOS-DECODE-BARRIER-SIZE": str(barrier_size),
-                "X-AIOS-DECODE-BARRIER-TIMEOUT-S": "900",
-            },
+            json=request_payload,
+            headers={"X-data-parallel-rank": str(data_parallel_rank)},
             stream=True,
-            timeout=(10.0, timeout_s),
+            timeout=timeout_s,
         ) as response:
             if response.status_code != 200:
                 error = f"HTTP {response.status_code}: {response.text[:500]}"
@@ -275,15 +264,14 @@ def streamed_completion(
 def run_round(
     *,
     endpoint: str,
-    request_bodies: list[bytes],
+    request_payloads: list[dict[str, Any]],
     concurrency: int,
     data_parallel_size: int,
-    barrier_group: str,
     timeout_s: float,
 ) -> list[RequestResult]:
-    if len(request_bodies) != concurrency:
+    if len(request_payloads) != concurrency:
         raise ValueError(
-            f"expected {concurrency} request bodies, got {len(request_bodies)}"
+            f"expected {concurrency} request payloads, got {len(request_payloads)}"
         )
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [
@@ -291,10 +279,8 @@ def run_round(
                 streamed_completion,
                 request_id=request_id,
                 endpoint=endpoint,
-                request_body=request_bodies[request_id],
+                request_payload=request_payloads[request_id],
                 data_parallel_rank=request_id % data_parallel_size,
-                barrier_group=barrier_group,
-                barrier_size=concurrency,
                 timeout_s=timeout_s,
             )
             for request_id in range(concurrency)
@@ -673,7 +659,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             "- 主 TPOT：与 tpu-misc 相同，统计 peak-active 窗口覆盖范围内"
             "的相邻 token 间隔；Request TPOT 仅作为完整请求生命周期的补充指标。"
         ),
-        "- 请求入队：服务端等待本轮全部请求抵达后统一释放。",
+        "- 请求入队：客户端并发提交，不使用服务端 admission barrier。",
         "- Token 计数：从 streaming cumulative `usage.completion_tokens` 展开。",
         "",
         "## 聚合指标",
@@ -764,6 +750,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--decode-tokens", type=positive_int, default=1024)
     parser.add_argument("--tokenizer-dir", type=Path, required=True)
     parser.add_argument("--rounds", type=positive_int, default=3)
+    parser.add_argument("--cache-salt-prefix", default="")
     parser.add_argument("--window-seconds", type=positive_float, default=10.0)
     parser.add_argument("--step-seconds", type=positive_float, default=1.0)
     parser.add_argument(
@@ -801,7 +788,7 @@ def main() -> None:
         flush=True,
     )
     endpoint = f"{base_url}/v1/completions"
-    run_namespace = (
+    run_namespace = args.cache_salt_prefix or (
         f"tpu-daily-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
     )
 
@@ -814,37 +801,34 @@ def main() -> None:
             f"C={args.concurrency} P={args.prefill_tokens} D={args.decode_tokens}",
             flush=True,
         )
-        round_namespace = f"{run_namespace}-round{round_index}"
-        request_bodies = [
-            json.dumps(
-                {
-                    "model": args.model,
-                    "prompt": prompt,
-                    "max_tokens": args.decode_tokens,
-                    "temperature": 0.0,
-                    "stream": True,
-                    "ignore_eos": True,
-                    "stream_options": {
-                        "include_usage": True,
-                        "continuous_usage_stats": True,
-                    },
-                    "cache_salt": (
-                        f"{round_namespace}-c{args.concurrency}-req{request_id}"
-                    ),
+        round_namespace = (
+            run_namespace
+            if args.rounds == 1
+            else f"{run_namespace}-round{round_index}"
+        )
+        request_payloads = [
+            {
+                "model": args.model,
+                "prompt": prompt,
+                "max_tokens": args.decode_tokens,
+                "temperature": 0.0,
+                "stream": True,
+                "ignore_eos": True,
+                "stream_options": {
+                    "include_usage": True,
+                    "continuous_usage_stats": True,
                 },
-                separators=(",", ":"),
-            ).encode("utf-8")
+                "cache_salt": (
+                    f"{round_namespace}-c{args.concurrency}-req{request_id}"
+                ),
+            }
             for request_id, prompt in enumerate(prompts)
         ]
         results = run_round(
             endpoint=endpoint,
-            request_bodies=request_bodies,
+            request_payloads=request_payloads,
             concurrency=args.concurrency,
             data_parallel_size=args.data_parallel_size,
-            barrier_group=(
-                f"{round_namespace}-p{args.prefill_tokens}"
-                f"-c{args.concurrency}-measured"
-            ),
             timeout_s=args.request_timeout_seconds,
         )
         write_raw_requests(raw_path, round_index=round_index, results=results)
@@ -901,7 +885,6 @@ def main() -> None:
             "step_s": args.step_seconds,
             "boundary": "peak_active_complete_sliding_windows",
             "token_accounting": "continuous_usage_completion_tokens",
-            "server_side_admission_barrier": True,
         },
         "best": (
             {
@@ -973,19 +956,27 @@ def main() -> None:
     )
     write_markdown(args.output_dir / "summary.md", summary)
 
-    if len(valid_rounds) != args.rounds:
+    failed_requests = sum(row["failed_requests"] for row in round_summaries)
+    if failed_requests:
         raise SystemExit(
-            f"decode benchmark has {len(valid_rounds)}/{args.rounds} valid rounds"
+            f"decode benchmark has {failed_requests} failed requests"
         )
     aggregate = summary["aggregate"]
-    print(
-        "[done] "
-        f"throughput_p50={aggregate['window_throughput_tok_s']['p50']:.3f} tok/s "
-        f"peak_active_tpot_p50_avg="
-        f"{aggregate['peak_active_tpot_p50_ms']['avg']:.3f} ms "
-        f"output={args.output_dir}",
-        flush=True,
-    )
+    throughput_p50 = aggregate["window_throughput_tok_s"]["p50"]
+    peak_tpot_avg = aggregate["peak_active_tpot_p50_ms"]["avg"]
+    if throughput_p50 is None or peak_tpot_avg is None:
+        print(
+            f"[done] no complete sliding window; output={args.output_dir}",
+            flush=True,
+        )
+    else:
+        print(
+            "[done] "
+            f"throughput_p50={throughput_p50:.3f} tok/s "
+            f"peak_active_tpot_p50_avg={peak_tpot_avg:.3f} ms "
+            f"output={args.output_dir}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

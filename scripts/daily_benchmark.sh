@@ -8,7 +8,6 @@ STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
-DECODE_MODEL_DIR="${DECODE_MODEL_DIR:-/mnt/data/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
@@ -417,36 +416,21 @@ fi
 cp "$STATE_DIR/environment.freeze.txt" "$RUN_DIR/environment.freeze.txt"
 
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  "$VENV_DIR/bin/python" - \
-    "$MODEL_DIR" \
-    "$DECODE_MODEL_DIR" \
-    "$RUN_PREFILL" \
-    "$RUN_DP_DECODE" <<'PY'
-from pathlib import Path
+  "$VENV_DIR/bin/python" - "$MODEL_DIR" <<'PY'
 import sys
 from transformers import AutoConfig, AutoTokenizer
 
-models = []
-if sys.argv[3] == "1":
-    models.append(("prefill metadata", sys.argv[1]))
-if sys.argv[4] == "1":
-    models.append(("decode weights", sys.argv[2]))
-
-for role, model_dir in models:
-    config = AutoConfig.from_pretrained(
-        model_dir, local_files_only=True, trust_remote_code=False
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_dir, local_files_only=True, trust_remote_code=False
-    )
-    if role == "decode weights" and not next(
-        Path(model_dir).glob("*.safetensors"), None
-    ):
-        raise SystemExit(f"ERROR: decode model has no safetensors: {model_dir}")
-    print(
-        f"Offline {role} OK: "
-        f"config={type(config).__name__}, tokenizer={type(tokenizer).__name__}"
-    )
+model_dir = sys.argv[1]
+config = AutoConfig.from_pretrained(
+    model_dir, local_files_only=True, trust_remote_code=False
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    model_dir, local_files_only=True, trust_remote_code=False
+)
+print(
+    "Offline model metadata OK: "
+    f"config={type(config).__name__}, tokenizer={type(tokenizer).__name__}"
+)
 PY
 
 cat > "$RUN_DIR/run_metadata.json" <<EOF
@@ -460,7 +444,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "model_directory": "$MODEL_DIR",
   "model_revision": "$model_revision",
   "model_load_format": "dummy",
-  "decode_model_directory": "$DECODE_MODEL_DIR",
+  "decode_model_directory": "$MODEL_DIR",
   "decode_model_load_format": "auto",
   "decode_workload": "C256/P65536/D1024",
   "benchmark_configs": $BENCHMARK_CONFIGS_JSON,
@@ -564,23 +548,61 @@ start_server() {
   echo "$benchmark_config server is healthy on port $PORT."
 }
 
-run_decode_benchmark() {
-  local result_dir="$RUN_DIR/results/dp8_decode_c256"
-  mkdir -p "$result_dir"
-  echo "Running real-weight DP8 C256 decode benchmark..."
+run_decode_smoke() {
+  local result_dir=$1
+  local smoke_dir="$result_dir/smoke"
+
+  echo "Running real-weight DP8 C8 decode smoke..."
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
     --base-url "http://127.0.0.1:$PORT" \
     --model Qwen3.5-397B-A17B-FP8 \
-    --output-dir "$result_dir" \
+    --output-dir "$smoke_dir" \
+    --concurrency 8 \
+    --data-parallel-size 8 \
+    --prefill-tokens 65536 \
+    --decode-tokens 32 \
+    --tokenizer-dir "$MODEL_DIR" \
+    --rounds 1 \
+    --window-seconds 10 \
+    --step-seconds 1 \
+    --cache-salt-prefix "tpu-daily-${timestamp}-smoke" \
+    2>&1 | tee "$RUN_DIR/dp8_decode_c256_smoke.log"
+}
+
+run_decode_round() {
+  local result_dir=$1
+  local run_index=$2
+  local run_dir="$result_dir/run_${run_index}"
+
+  echo "Running real-weight DP8 C256 decode round $run_index/3..."
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
+    --base-url "http://127.0.0.1:$PORT" \
+    --model Qwen3.5-397B-A17B-FP8 \
+    --output-dir "$run_dir" \
     --concurrency 256 \
     --data-parallel-size 8 \
     --prefill-tokens 65536 \
     --decode-tokens 1024 \
-    --tokenizer-dir "$DECODE_MODEL_DIR" \
-    --rounds 3 \
+    --tokenizer-dir "$MODEL_DIR" \
+    --rounds 1 \
     --window-seconds 10 \
     --step-seconds 1 \
-    2>&1 | tee "$RUN_DIR/dp8_decode_c256_benchmark.log"
+    --cache-salt-prefix "tpu-daily-${timestamp}-run${run_index}" \
+    2>&1 | tee "$RUN_DIR/dp8_decode_c256_run_${run_index}.log"
+}
+
+run_decode_benchmark() {
+  local result_dir="$RUN_DIR/results/dp8_decode_c256"
+  local run_index
+
+  mkdir -p "$result_dir"
+  run_decode_smoke "$result_dir"
+  for run_index in 1 2 3; do
+    run_decode_round "$result_dir" "$run_index"
+  done
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/aggregate_decode_runs.py" \
+    --result-root "$result_dir" \
+    --runs 3
 
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
   echo "DP8 C256 decode benchmark completed successfully."
@@ -608,7 +630,7 @@ trap stop_server EXIT
 trap on_signal INT TERM
 
 if (( RUN_DP_DECODE )); then
-  start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$DECODE_MODEL_DIR"
+  start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$MODEL_DIR"
   run_decode_benchmark
   if (( RUN_DP_PREFILL || RUN_PCP_PREFILL )); then
     stop_server

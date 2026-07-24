@@ -7,8 +7,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-DECODE_BARRIER_PATCH_DIR="$SCRIPT_DIR/decode_barrier_patch"
-MODEL_DIR="${MODEL_DIR:-/mnt/data/models/Qwen3.5-397B-A17B-FP8}"
+MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
@@ -46,14 +45,8 @@ if [[ ! -d "$TORCHTPU_DIR/src/vllm_torchtpu" ]]; then
   echo "ERROR: vllm-torchtpu submodule is missing: $TORCHTPU_DIR" >&2
   exit 1
 fi
-if [[ ! -f "$DECODE_BARRIER_PATCH_DIR/sitecustomize.py" ]]; then
-  echo "ERROR: decode barrier patch is missing: $DECODE_BARRIER_PATCH_DIR" >&2
-  exit 1
-fi
-if [[ ! -f "$MODEL_DIR/config.json" ||
-      ! -f "$MODEL_DIR/tokenizer.json" ||
-      -z "$(find "$MODEL_DIR" -maxdepth 1 -name '*.safetensors' -print -quit)" ]]; then
-  echo "ERROR: real model weights or metadata are incomplete: $MODEL_DIR" >&2
+if [[ ! -f "$MODEL_DIR/config.json" || ! -f "$MODEL_DIR/tokenizer.json" ]]; then
+  echo "ERROR: local model metadata is incomplete: $MODEL_DIR" >&2
   exit 1
 fi
 
@@ -68,7 +61,7 @@ CACHE_KEY+="_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}"
 CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
 
-export PYTHONPATH="$DECODE_BARRIER_PATCH_DIR:$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH="$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
@@ -148,7 +141,6 @@ exec "$VENV_DIR/bin/python" \
   --model "$MODEL_DIR" \
   --served-model-name "$SERVED_MODEL_NAME" \
   --trust-remote-code \
-  --generation-config vllm \
   --seed 42 \
   --tensor-parallel-size 1 \
   --data-parallel-size 8 \

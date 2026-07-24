@@ -167,7 +167,7 @@ report_args=(
   --output-length "$OUTPUT_LEN"
   --model "$SERVED_MODEL_NAME"
 )
-decode_summary="$RUN_DIR/results/dp8_decode_c256/summary.json"
+decode_summary="$RUN_DIR/results/dp8_decode_c256/aggregate.json"
 if [[ "$BENCHMARK_CONFIG" == "dp8" && -f "$decode_summary" ]]; then
   report_args+=(--decode-summary "$decode_summary")
 fi

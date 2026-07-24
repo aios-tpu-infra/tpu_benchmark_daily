@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 BENCHMARK_CONFIGS = {
@@ -42,8 +42,8 @@ CSV_FIELDS = (
     "best_concurrency",
     "mean_ttft_ms",
     "p99_ttft_ms",
-    "decode_peak_output_throughput",
-    "decode_min_tpot_ms",
+    "decode_window_p50_throughput",
+    "decode_peak_active_tpot_p50_ms",
     "torchtpu_vllm_revision",
     "torch_tpu_revision",
     "torch_tpu_version",
@@ -220,22 +220,25 @@ def decode_metrics(
         if decode_summary is not None
         else summary.get("decode_sliding_window")
     )
-    if not isinstance(decode, dict) or not isinstance(decode.get("best"), dict):
+    if not isinstance(decode, dict):
         return None, None
 
-    best = decode["best"]
     aggregate = decode.get("aggregate")
-    request_tpot = (
-        aggregate.get("request_tpot_ms") if isinstance(aggregate, dict) else None
+    if not isinstance(aggregate, dict):
+        return None, None
+    throughput = aggregate.get("throughput_peak_active_p50_tok_s")
+    peak_active_tpot = aggregate.get("tpot_peak_active_p50_ms")
+    window_p50_throughput = optional_finite_float(
+        throughput.get("avg") if isinstance(throughput, dict) else None,
+        "decode_window_p50_throughput",
     )
-    peak_output_throughput = optional_finite_float(
-        best.get("output_throughput"), "decode_peak_output_throughput"
+    peak_active_tpot_p50_ms = optional_finite_float(
+        peak_active_tpot.get("avg")
+        if isinstance(peak_active_tpot, dict)
+        else None,
+        "decode_peak_active_tpot_p50_ms",
     )
-    min_tpot_ms = optional_finite_float(
-        request_tpot.get("min") if isinstance(request_tpot, dict) else None,
-        "decode_min_tpot_ms",
-    )
-    return peak_output_throughput, min_tpot_ms
+    return window_p50_throughput, peak_active_tpot_p50_ms
 
 
 def build_record(
@@ -279,9 +282,10 @@ def build_record(
     decode_summary = (
         load_json(decode_summary_path) if decode_summary_path is not None else None
     )
-    decode_peak_output_throughput, decode_min_tpot_ms = decode_metrics(
-        summary, benchmark_config, decode_summary
-    )
+    (
+        decode_window_p50_throughput,
+        decode_peak_active_tpot_p50_ms,
+    ) = decode_metrics(summary, benchmark_config, decode_summary)
 
     input_length = (
         input_length
@@ -357,8 +361,8 @@ def build_record(
         "best_concurrency": positive_int(best["concurrency"], "best_concurrency"),
         "mean_ttft_ms": finite_float(best["mean_ttft_ms"], "mean_ttft_ms"),
         "p99_ttft_ms": finite_float(best["p99_ttft_ms"], "p99_ttft_ms"),
-        "decode_peak_output_throughput": decode_peak_output_throughput,
-        "decode_min_tpot_ms": decode_min_tpot_ms,
+        "decode_window_p50_throughput": decode_window_p50_throughput,
+        "decode_peak_active_tpot_p50_ms": decode_peak_active_tpot_p50_ms,
         "torchtpu_vllm_revision": str(
             metadata.get("torchtpu_vllm_revision", "unknown")
         ),
@@ -377,7 +381,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -389,12 +393,13 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         run["benchmark_config"] = normalize_benchmark_config(
             run.get("benchmark_config") or infer_legacy_benchmark_config(run)
         )
-        run["decode_peak_output_throughput"] = optional_finite_float(
-            run.get("decode_peak_output_throughput"),
-            "decode_peak_output_throughput",
+        run["decode_window_p50_throughput"] = optional_finite_float(
+            run.get("decode_window_p50_throughput"),
+            "decode_window_p50_throughput",
         )
-        run["decode_min_tpot_ms"] = optional_finite_float(
-            run.get("decode_min_tpot_ms"), "decode_min_tpot_ms"
+        run["decode_peak_active_tpot_p50_ms"] = optional_finite_float(
+            run.get("decode_peak_active_tpot_p50_ms"),
+            "decode_peak_active_tpot_p50_ms",
         )
     return runs
 
@@ -704,10 +709,12 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "concurrency": run["best_concurrency"],
         "mean_ttft_ms": run["mean_ttft_ms"],
         "p99_ttft_ms": run["p99_ttft_ms"],
-        "decode_peak_output_throughput": run.get(
-            "decode_peak_output_throughput"
+        "decode_window_p50_throughput": run.get(
+            "decode_window_p50_throughput"
         ),
-        "decode_min_tpot_ms": run.get("decode_min_tpot_ms"),
+        "decode_peak_active_tpot_p50_ms": run.get(
+            "decode_peak_active_tpot_p50_ms"
+        ),
         "torchtpu_vllm_revision": run["torchtpu_vllm_revision"],
         "torch_tpu_revision": run["torch_tpu_revision"],
         "torch_tpu_version": run["torch_tpu_version"],
@@ -796,16 +803,18 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             pcp_run.get("best_total_token_throughput") if pcp_run else None
         )
         dp_decode = (
-            dp_run.get("decode_peak_output_throughput") if dp_run else None
+            dp_run.get("decode_window_p50_throughput") if dp_run else None
         )
-        dp_min_tpot = dp_run.get("decode_min_tpot_ms") if dp_run else None
+        dp_tpot_p50 = (
+            dp_run.get("decode_peak_active_tpot_p50_ms") if dp_run else None
+        )
         rows.append(
             f"| {revision_display} | "
             f"{display_time(grouped_run['started_at'])} | "
             f"{table_metric(dp_prefill)} | "
             f"{table_metric(pcp_prefill)} | "
             f"{table_metric(dp_decode)} | "
-            f"{table_metric(dp_min_tpot)} |"
+            f"{table_metric(dp_tpot_p50)} |"
         )
 
     return "\n".join(
@@ -825,7 +834,8 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "",
             "| vllm-torchtpu commit | Test time (UTC) | "
             "DP peak prefill tok/s | PCP peak prefill tok/s | "
-            "DP peak decode tok/s | DP min TPOT (ms) |",
+            "DP decode peak-active window P50 tok/s | "
+            "DP peak-active TPOT P50 (ms) |",
             "|---|---|---:|---:|---:|---:|",
             *rows,
             "",

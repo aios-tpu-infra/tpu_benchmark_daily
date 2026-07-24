@@ -7,9 +7,8 @@ TP1/DP8/EP8 C256 decode、dummy-weight DP8 prefill 和 dummy-weight PCP8
 prefill。Decode 使用 C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，
 按实际 peak-active plateau 统计；prefill 保持原有口径，避免破坏历史趋势。
 
-项目内 `models/` 只保存 prefill dummy 服务使用的离线 config/tokenizer。
-Decode 默认从 `/mnt/data/models/Qwen3.5-397B-A17B-FP8` 加载完整权重，可通过
-`DECODE_MODEL_DIR` 覆盖。
+三组服务统一使用项目内 `models/Qwen3.5-397B-A17B-FP8`。Decode 从该目录
+加载完整权重；DP8/PCP8 prefill 对同一目录使用 `--load-format dummy`。
 
 ## Recent benchmark throughput
 
@@ -45,10 +44,12 @@ The charts compare the latest successful DP8 and PCP8 throughput across concurre
 
 - `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
   refreshed from `origin/main` (the local path is retained for compatibility).
-- `models/`: offline model metadata; no checkpoint weights.
+- `models/`: offline model metadata and locally provisioned checkpoint weights;
+  checkpoint files are excluded from Git.
 - `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
   C256 decode service with unified pool, 4352-token pages, GMU 0.96, async
-  scheduling, GDN v3, and prefix cache disabled.
+  scheduling, GDN v3, prefix cache disabled, and the same compile shapes as
+  the current standalone C256 test.
 - `scripts/start_dp_server.sh`: starts the DP8/PCP1 vLLM server with dummy weights.
 - `scripts/start_pcp_server.sh`: starts the DP1/PCP8 vLLM server with dummy weights.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64 for
@@ -72,10 +73,10 @@ gcloud auth login
 gcloud auth list --filter=status:ACTIVE
 ```
 
-完整 daily run 还要求 `DECODE_MODEL_DIR` 中存在 `config.json`、
-`tokenizer.json` 和真实 `*.safetensors` 权重。默认全量
-`--prepare-only` 同样检查这套 decode 权重，以便在占用 TPU 前尽早失败；
-配合 `--only` 时只检查所选 benchmark 需要的模型。
+完整 daily run 要求 `models/Qwen3.5-397B-A17B-FP8` 中存在真实模型权重。
+权重文件由环境在本地提供并被 Git 忽略；`--prepare-only` 和三个启动脚本
+只执行与 DP8/PCP8 一致的 config/tokenizer 元数据检查，decode 加载权重时
+仍会由模型加载器验证权重是否完整。
 
 The installer deliberately uses `gcloud auth print-access-token` instead of
 Application Default Credentials because these can represent different users or
@@ -112,9 +113,9 @@ scripts/daily_benchmark.sh --only pcp-prefill
 
 Omitting `--only` preserves the full three-group workflow. A selective run
 updates the environment in the same way as a full run, but validates and starts
-only the model/service required by the selected benchmark. This means
-`--only pcp-prefill` does not require the real decode weights in
-`DECODE_MODEL_DIR`.
+only the service required by the selected benchmark. DP8/PCP8 prefill-only
+runs use `--load-format dummy`, so they do not require real checkpoint weights
+in the shared model directory.
 
 DP or PCP prefill-only runs regenerate and publish their throughput report
 unless `PUBLISH_REPORTS=0`. A decode-only run records its artifacts beneath the
@@ -127,41 +128,55 @@ server listening on `PORT` (18100 by default), including its worker process
 group. A non-vLLM process on that port is never killed and causes the job to
 fail safely. `--prepare-only` leaves any running service untouched.
 
-The runner first starts the real-weight DP8 C256 decode service, runs
-C256/P65536/D1024 for three rounds, and stops it. It then starts the existing
+The runner first starts the real-weight DP8 C256 decode service, runs one
+C8/P65536/D32 smoke process followed by three independent
+C256/P65536/D1024 processes, and stops it. It then starts the existing
 dummy-weight DP8 and PCP8 services one at a time for their prefill suites. The
 complete run therefore contains three benchmark groups: DP8 C256 decode, DP8
 prefill, and PCP8 prefill. Servers are stopped after the benchmark by default.
 Use `--keep-server-running` only for interactive debugging; when successful,
 it keeps the final PCP8 server alive.
 
-Decode 每条请求使用不同但可重复生成的自然语言前缀，服务关闭 prefix cache，
-不会因同 prompt 复用 KV cache；client 通过 `X-data-parallel-rank` 将
-256 条请求精确均分为每个 DP rank 32 条。服务端 admission barrier 等待本轮
-256 条请求全部完成 HTTP 解析后再统一加入 engine，避免 64K 请求的解析偏斜
-造成各 DP rank 的 Prefill/Decode 波次错位。客户端从 streaming cumulative
-`usage.completion_tokens` 展开 token 时间线，与 tpu-misc C256 记录使用相同
-计数口径。
+All three services use `models/Qwen3.5-397B-A17B-FP8` as their model
+directory. The decode service uses the real checkpoint from that directory;
+DP8 and PCP8 prefill continue to pass `--load-format dummy`.
 
-若 256 条请求没有形成完整 10 秒重叠区间，
-`summary.json` 中的 `active_requests_max` 和
+Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 `cache_salt`，因此
+不依赖 prefix cache 的跨请求复用；client 通过 `X-data-parallel-rank` 将
+256 条请求按 `request_id % 8` 精确均分为每个 DP rank 32 条。请求直接并发
+提交，不使用服务端 admission barrier。客户端通过 `requests.post(json=...)`
+发起 streaming 请求，并从 cumulative `usage.completion_tokens` 展开 token
+时间线，与当前 tpu-misc C256 记录使用相同计数口径。
+
+若 256 条请求没有形成完整 10 秒重叠区间，各轮
+`run_<N>/summary.json` 中的 `active_requests_max` 和
 `timeline_valid_full_concurrency_decode` 会记录实际峰值并发，主吞吐取该峰值
 并发平台窗口的 P50；主 TPOT 统计相同 peak-active 时间范围内的 token 间隔，
-逐请求全生命周期 TPOT 作为补充。原始请求、窗口和逐请求 TPOT 分别位于
-`raw_requests.jsonl`、`timeline.csv` 和 `request_tpot.csv`。
+逐请求全生命周期 TPOT 作为补充。三轮结果均为独立 Python 进程，最终
+`aggregate.json`/`aggregate.csv` 对每轮指标计算 `count`、`avg`、`min`、
+`max`、sample `stddev`、`p90` 和 `p99`；daily 报告使用三轮
+peak-active window throughput P50 的平均值，以及三轮 peak-active TPOT P50
+的平均值。
 
-三组测试的结果使用严格对齐的同级目录，每个目录都在根部提供
-`summary.json`：
+三组测试的结果使用同级目录；两个 prefill 目录在根部提供 `summary.json`，
+decode 目录保存 smoke、三轮独立 summary 及跨轮 aggregate：
 
 ```text
 runs/<UTC timestamp>/results/
 ├── dp8_decode_c256/
-│   ├── summary.json
-│   ├── summary.md
-│   ├── rounds.csv
-│   ├── timeline.csv
-│   ├── request_tpot.csv
-│   └── raw_requests.jsonl
+│   ├── smoke/
+│   │   └── summary.json
+│   ├── run_1/
+│   │   ├── summary.json
+│   │   ├── timeline.csv
+│   │   ├── request_tpot.csv
+│   │   └── raw_requests.jsonl
+│   ├── run_2/
+│   │   └── ...
+│   ├── run_3/
+│   │   └── ...
+│   ├── aggregate.json
+│   └── aggregate.csv
 ├── dp8/
 │   ├── summary.json
 │   └── vllm_dp8_tp1_len8192_c*.json
@@ -171,7 +186,7 @@ runs/<UTC timestamp>/results/
 ```
 
 Decode、DP8 prefill 和 PCP8 prefill 的原始摘要相互独立；报告生成器显式读取
-`dp8_decode_c256/summary.json`，不会再把 decode 原始结果嵌套进
+`dp8_decode_c256/aggregate.json`，不会再把 decode 原始结果嵌套进
 `dp8/summary.json`。
 
 The three benchmark groups share one run ID and one workflow start timestamp.

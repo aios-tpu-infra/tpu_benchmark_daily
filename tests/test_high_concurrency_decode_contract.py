@@ -20,6 +20,7 @@ class HighConcurrencyDecodeServiceContractTest(unittest.TestCase):
             'BLOCK_SIZE="${BLOCK_SIZE:-4352}"',
             'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.96}"',
             'COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4352,4384}"',
+            'DECODE_BARRIER_PATCH_DIR="$SCRIPT_DIR/decode_barrier_patch"',
             "export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1",
             "unset TPU_VLLM_KV_CACHE_ALIAS_FALLBACK",
             "export TPU_KV_CACHE_HEADROOM_MIB=6144",
@@ -37,6 +38,7 @@ class HighConcurrencyDecodeServiceContractTest(unittest.TestCase):
                 self.assertIn(fragment, script)
 
         self.assertNotIn("--load-format dummy", script)
+        self.assertNotIn("--return-tokens-as-token-ids", script)
         self.assertNotIn(
             "export VLLM_MOE_ROUTING_SIMULATION_STRATEGY", script
         )
@@ -65,6 +67,12 @@ class HighConcurrencyDecodeServiceContractTest(unittest.TestCase):
         self.assertIn("--rounds 3", script)
         self.assertIn("--window-seconds 10", script)
         self.assertIn("--step-seconds 1", script)
+        benchmark_script = (
+            PROJECT_ROOT / "scripts" / "bench_decode_sliding_window.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"X-AIOS-DECODE-BARRIER": barrier_group', benchmark_script)
+        self.assertIn('"continuous_usage_stats": True', benchmark_script)
+        self.assertNotIn('"return_token_ids": True', benchmark_script)
         self.assertNotIn("--concurrency 16", script)
         self.assertNotIn("--decode-tokens 4096", script)
 

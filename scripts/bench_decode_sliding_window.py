@@ -19,7 +19,6 @@ import json
 import math
 from pathlib import Path
 import statistics
-import threading
 import time
 from typing import Any, Callable, Iterator
 
@@ -165,7 +164,6 @@ def build_request_tpot_rows(
     *,
     round_index: int,
     results: list[RequestResult],
-    decode_tokens: int,
     batch_start_s: float,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -173,7 +171,6 @@ def build_request_tpot_rows(
         received_tokens = len(result.token_times_s)
         if (
             result.error is not None
-            or received_tokens != decode_tokens
             or received_tokens < 2
         ):
             continue
@@ -194,15 +191,20 @@ def build_request_tpot_rows(
     return rows
 
 
-def token_timestamps_from_choice(
-    choice: dict[str, Any], received_s: float
-) -> list[float]:
-    token_ids = choice.get("token_ids")
-    if not isinstance(token_ids, list):
-        raise ValueError("stream chunk is missing token_ids")
-    if not all(isinstance(token_id, int) for token_id in token_ids):
-        raise ValueError("stream chunk contains a non-integer token ID")
-    return [received_s] * len(token_ids)
+def completion_token_delta(
+    event: dict[str, Any], previous_completion_tokens: int
+) -> tuple[int, int]:
+    choices = event.get("choices") or []
+    if not choices or not choices[0].get("text"):
+        return 0, previous_completion_tokens
+    usage = event.get("usage") or {}
+    completion_tokens = usage.get("completion_tokens")
+    if isinstance(completion_tokens, int):
+        return (
+            max(1, completion_tokens - previous_completion_tokens),
+            completion_tokens,
+        )
+    return 1, previous_completion_tokens + 1
 
 
 def iter_sse_data(response: requests.Response) -> Iterator[str]:
@@ -220,17 +222,13 @@ def streamed_completion(
     endpoint: str,
     request_body: bytes,
     data_parallel_rank: int,
-    start_barrier: threading.Barrier,
+    barrier_group: str,
+    barrier_size: int,
     timeout_s: float,
 ) -> RequestResult:
-    try:
-        start_barrier.wait(timeout=60)
-    except threading.BrokenBarrierError:
-        now = time.perf_counter()
-        return RequestResult(request_id, now, now, [], "start barrier failed")
-
     started_s = time.perf_counter()
     token_times_s: list[float] = []
+    previous_completion_tokens = 0
     error = None
     try:
         with requests.post(
@@ -240,6 +238,9 @@ def streamed_completion(
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
                 "X-data-parallel-rank": str(data_parallel_rank),
+                "X-AIOS-DECODE-BARRIER": barrier_group,
+                "X-AIOS-DECODE-BARRIER-SIZE": str(barrier_size),
+                "X-AIOS-DECODE-BARRIER-TIMEOUT-S": "900",
             },
             stream=True,
             timeout=(10.0, timeout_s),
@@ -252,13 +253,13 @@ def streamed_completion(
                     if data == "[DONE]":
                         break
                     event = json.loads(data)
-                    choices = event.get("choices") or []
-                    if not choices:
-                        continue
-                    choice = choices[0]
-                    token_times_s.extend(
-                        token_timestamps_from_choice(choice, received_s)
+                    token_delta, previous_completion_tokens = (
+                        completion_token_delta(
+                            event,
+                            previous_completion_tokens,
+                        )
                     )
+                    token_times_s.extend([received_s] * token_delta)
     except Exception as exc:  # noqa: BLE001
         error = repr(exc)
 
@@ -277,13 +278,13 @@ def run_round(
     request_bodies: list[bytes],
     concurrency: int,
     data_parallel_size: int,
+    barrier_group: str,
     timeout_s: float,
 ) -> list[RequestResult]:
     if len(request_bodies) != concurrency:
         raise ValueError(
             f"expected {concurrency} request bodies, got {len(request_bodies)}"
         )
-    barrier = threading.Barrier(concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [
             pool.submit(
@@ -292,7 +293,8 @@ def run_round(
                 endpoint=endpoint,
                 request_body=request_bodies[request_id],
                 data_parallel_rank=request_id % data_parallel_size,
-                start_barrier=barrier,
+                barrier_group=barrier_group,
+                barrier_size=concurrency,
                 timeout_s=timeout_s,
             )
             for request_id in range(concurrency)
@@ -309,7 +311,6 @@ def analyze_round(
     round_index: int,
     results: list[RequestResult],
     concurrency: int,
-    decode_tokens: int,
     window_s: float,
     step_s: float,
 ) -> RoundAnalysis:
@@ -317,18 +318,15 @@ def analyze_round(
         {
             "request_id": result.request_id,
             "received_tokens": len(result.token_times_s),
-            "error": result.error or (
-                f"expected {decode_tokens} tokens, received {len(result.token_times_s)}"
-            ),
+            "error": result.error or "stream returned no completion tokens",
         }
         for result in results
-        if result.error is not None or len(result.token_times_s) != decode_tokens
+        if result.error is not None or not result.token_times_s
     ]
     batch_start_s = min((result.started_s for result in results), default=0.0)
     request_tpots = build_request_tpot_rows(
         round_index=round_index,
         results=results,
-        decode_tokens=decode_tokens,
         batch_start_s=batch_start_s,
     )
     summary: dict[str, Any] = {
@@ -343,7 +341,13 @@ def analyze_round(
         "timeline_valid_full_concurrency_decode": False,
         "full_concurrency_window_count": 0,
         "window_count": 0,
+        "usage_tokens": sum(len(result.token_times_s) for result in results),
+        "submit_skew_s": None,
+        "first_token_skew_s": None,
+        "ttft_s": metric_stats([]),
+        "end_to_end_throughput_tok_s": None,
         "window_throughput_tok_s": metric_stats([]),
+        "peak_active_tpot_ms": metric_stats([]),
         "request_tpot_ms": metric_stats(
             [float(row["tpot_ms"]) for row in request_tpots]
         ),
@@ -355,6 +359,10 @@ def analyze_round(
         summary["invalid_reason"] = "incomplete_requests"
         return RoundAnalysis(summary, [], request_tpots)
 
+    starts_s = [result.started_s for result in results]
+    firsts_s = [result.token_times_s[0] for result in results]
+    lasts_s = [result.token_times_s[-1] for result in results]
+    end_to_end_span_s = max(lasts_s) - min(starts_s)
     full_start_s = max(result.token_times_s[1] for result in results)
     full_end_s = min(result.token_times_s[-1] for result in results)
     full_duration_s = max(0.0, full_end_s - full_start_s)
@@ -363,6 +371,17 @@ def analyze_round(
             "full_overlap_start_after_batch_start_s": full_start_s - batch_start_s,
             "full_overlap_end_after_batch_start_s": full_end_s - batch_start_s,
             "full_overlap_duration_s": full_duration_s,
+            "submit_skew_s": max(starts_s) - min(starts_s),
+            "first_token_skew_s": max(firsts_s) - min(firsts_s),
+            "ttft_s": metric_stats(
+                [
+                    first_token_s - started_s
+                    for first_token_s, started_s in zip(firsts_s, starts_s)
+                ]
+            ),
+            "end_to_end_throughput_tok_s": (
+                summary["usage_tokens"] / end_to_end_span_s
+            ),
         }
     )
     all_token_times = sorted(
@@ -417,6 +436,20 @@ def analyze_round(
     for index, window in enumerate(windows, start=1):
         window["window"] = index
     throughputs = [float(window["throughput_tok_s"]) for window in windows]
+    peak_start_s = min(
+        float(window["start_after_batch_start_s"]) for window in windows
+    ) + batch_start_s
+    peak_end_s = max(
+        float(window["end_after_batch_start_s"]) for window in windows
+    ) + batch_start_s
+    peak_active_itls_ms = [
+        (current_s - previous_s) * 1000
+        for result in results
+        for previous_s, current_s in zip(
+            result.token_times_s, result.token_times_s[1:]
+        )
+        if peak_start_s <= current_s < peak_end_s
+    ]
     summary.update(
         {
             "active_requests_max": active_requests_max,
@@ -429,6 +462,7 @@ def analyze_round(
             ),
             "window_count": len(windows),
             "window_throughput_tok_s": metric_stats(throughputs),
+            "peak_active_tpot_ms": metric_stats(peak_active_itls_ms),
             "valid": bool(windows),
             "invalid_reason": "" if windows else "no_samples",
         }
@@ -483,6 +517,12 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         "valid",
         "successful_requests",
         "failed_requests",
+        "usage_tokens",
+        "submit_skew_s",
+        "first_token_skew_s",
+        "ttft_p50_s",
+        "ttft_p90_s",
+        "end_to_end_throughput_tok_s",
         "full_overlap_duration_s",
         "active_requests_max",
         "timeline_valid_full_concurrency_decode",
@@ -496,6 +536,14 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         "throughput_p50_tok_s",
         "throughput_p90_tok_s",
         "throughput_p99_tok_s",
+        "peak_active_tpot_count",
+        "peak_active_tpot_avg_ms",
+        "peak_active_tpot_min_ms",
+        "peak_active_tpot_max_ms",
+        "peak_active_tpot_stddev_ms",
+        "peak_active_tpot_p50_ms",
+        "peak_active_tpot_p90_ms",
+        "peak_active_tpot_p99_ms",
         "request_tpot_count",
         "request_tpot_avg_ms",
         "request_tpot_min_ms",
@@ -511,6 +559,7 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         writer.writeheader()
         for row in rounds:
             throughput = row["window_throughput_tok_s"]
+            peak_active_tpot = row["peak_active_tpot_ms"]
             request_tpot = row["request_tpot_ms"]
             writer.writerow(
                 {
@@ -518,6 +567,14 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
                     "valid": row["valid"],
                     "successful_requests": row["successful_requests"],
                     "failed_requests": row["failed_requests"],
+                    "usage_tokens": row["usage_tokens"],
+                    "submit_skew_s": row["submit_skew_s"],
+                    "first_token_skew_s": row["first_token_skew_s"],
+                    "ttft_p50_s": row["ttft_s"]["p50"],
+                    "ttft_p90_s": row["ttft_s"]["p90"],
+                    "end_to_end_throughput_tok_s": row[
+                        "end_to_end_throughput_tok_s"
+                    ],
                     "full_overlap_duration_s": row["full_overlap_duration_s"],
                     "active_requests_max": row["active_requests_max"],
                     "timeline_valid_full_concurrency_decode": row[
@@ -535,6 +592,14 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
                     "throughput_p50_tok_s": throughput["p50"],
                     "throughput_p90_tok_s": throughput["p90"],
                     "throughput_p99_tok_s": throughput["p99"],
+                    "peak_active_tpot_count": peak_active_tpot["count"],
+                    "peak_active_tpot_avg_ms": peak_active_tpot["avg"],
+                    "peak_active_tpot_min_ms": peak_active_tpot["min"],
+                    "peak_active_tpot_max_ms": peak_active_tpot["max"],
+                    "peak_active_tpot_stddev_ms": peak_active_tpot["stddev"],
+                    "peak_active_tpot_p50_ms": peak_active_tpot["p50"],
+                    "peak_active_tpot_p90_ms": peak_active_tpot["p90"],
+                    "peak_active_tpot_p99_ms": peak_active_tpot["p99"],
                     "request_tpot_count": request_tpot["count"],
                     "request_tpot_avg_ms": request_tpot["avg"],
                     "request_tpot_min_ms": request_tpot["min"],
@@ -572,6 +637,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
     benchmark = summary["benchmark"]
     aggregate = summary["aggregate"]
     throughput = aggregate["window_throughput_tok_s"]
+    peak_active_tpot = aggregate["peak_active_tpot_p50_ms"]
     request_tpot = aggregate["request_tpot_ms"]
     valid_rounds = summary["valid_rounds"]
     requested_rounds = summary["requested_rounds"]
@@ -604,9 +670,11 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             "保留能完整覆盖整个窗口的活跃请求数达到本轮峰值的窗口。"
         ),
         (
-            "- Request TPOT：每条成功请求使用完整输出的首尾 token 时间跨度，"
-            "除以输出 token 间隔数；不依赖吞吐窗口是否有效。"
+            "- 主 TPOT：与 tpu-misc 相同，统计 peak-active 窗口覆盖范围内"
+            "的相邻 token 间隔；Request TPOT 仅作为完整请求生命周期的补充指标。"
         ),
+        "- 请求入队：服务端等待本轮全部请求抵达后统一释放。",
+        "- Token 计数：从 streaming cumulative `usage.completion_tokens` 展开。",
         "",
         "## 聚合指标",
         "",
@@ -620,6 +688,16 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{format_metric(throughput['p50'])}|"
             f"{format_metric(throughput['p90'])}|"
             f"{format_metric(throughput['p99'])}|"
+        ),
+        (
+            "|Peak-active TPOT P50 across rounds (ms)|"
+            f"{peak_active_tpot['count']}|{format_metric(peak_active_tpot['avg'])}|"
+            f"{format_metric(peak_active_tpot['min'])}|"
+            f"{format_metric(peak_active_tpot['max'])}|"
+            f"{format_metric(peak_active_tpot['stddev'])}|"
+            f"{format_metric(peak_active_tpot['p50'])}|"
+            f"{format_metric(peak_active_tpot['p90'])}|"
+            f"{format_metric(peak_active_tpot['p99'])}|"
         ),
         (
             "|Request TPOT (ms)|"
@@ -653,7 +731,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
         (
             "|round|valid|requests|peak active|full overlap (s)|windows|"
-            "throughput P50 (tok/s)|Request TPOT avg (ms)|reason|"
+            "throughput P50 (tok/s)|Peak TPOT P50 (ms)|reason|"
         ),
         "|---:|:---:|---:|---:|---:|---:|---:|---:|---|",
     ]
@@ -664,7 +742,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{row['active_requests_max']}|"
             f"{format_metric(row['full_overlap_duration_s'])}|{row['window_count']}|"
             f"{format_metric(row['window_throughput_tok_s']['p50'])}|"
-            f"{format_metric(row['request_tpot_ms']['avg'])}|{row['invalid_reason']}|"
+            f"{format_metric(row['peak_active_tpot_ms']['p50'])}|"
+            f"{row['invalid_reason']}|"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -721,25 +800,10 @@ def main() -> None:
         f"unique_requests={len(prompts)}",
         flush=True,
     )
-    request_bodies = [
-        json.dumps(
-            {
-                "model": args.model,
-                "prompt": prompt,
-                "max_tokens": args.decode_tokens,
-                "temperature": 0.0,
-                "stream": True,
-                "ignore_eos": True,
-                "return_token_ids": True,
-                "cache_salt": (
-                    f"tpu-daily-c{args.concurrency}-req{request_id}"
-                ),
-            },
-            separators=(",", ":"),
-        ).encode("utf-8")
-        for request_id, prompt in enumerate(prompts)
-    ]
     endpoint = f"{base_url}/v1/completions"
+    run_namespace = (
+        f"tpu-daily-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+    )
 
     round_summaries: list[dict[str, Any]] = []
     all_windows: list[dict[str, Any]] = []
@@ -750,11 +814,37 @@ def main() -> None:
             f"C={args.concurrency} P={args.prefill_tokens} D={args.decode_tokens}",
             flush=True,
         )
+        round_namespace = f"{run_namespace}-round{round_index}"
+        request_bodies = [
+            json.dumps(
+                {
+                    "model": args.model,
+                    "prompt": prompt,
+                    "max_tokens": args.decode_tokens,
+                    "temperature": 0.0,
+                    "stream": True,
+                    "ignore_eos": True,
+                    "stream_options": {
+                        "include_usage": True,
+                        "continuous_usage_stats": True,
+                    },
+                    "cache_salt": (
+                        f"{round_namespace}-c{args.concurrency}-req{request_id}"
+                    ),
+                },
+                separators=(",", ":"),
+            ).encode("utf-8")
+            for request_id, prompt in enumerate(prompts)
+        ]
         results = run_round(
             endpoint=endpoint,
             request_bodies=request_bodies,
             concurrency=args.concurrency,
             data_parallel_size=args.data_parallel_size,
+            barrier_group=(
+                f"{round_namespace}-p{args.prefill_tokens}"
+                f"-c{args.concurrency}-measured"
+            ),
             timeout_s=args.request_timeout_seconds,
         )
         write_raw_requests(raw_path, round_index=round_index, results=results)
@@ -762,7 +852,6 @@ def main() -> None:
             round_index=round_index,
             results=results,
             concurrency=args.concurrency,
-            decode_tokens=args.decode_tokens,
             window_s=args.window_seconds,
             step_s=args.step_seconds,
         )
@@ -774,7 +863,8 @@ def main() -> None:
             f"peak_active={analysis.summary['active_requests_max']} "
             f"windows={analysis.summary['window_count']} "
             f"throughput_p50={analysis.summary['window_throughput_tok_s']['p50']} "
-            f"request_tpot_avg_ms={analysis.summary['request_tpot_ms']['avg']}",
+            f"peak_active_tpot_p50_ms="
+            f"{analysis.summary['peak_active_tpot_ms']['p50']}",
             flush=True,
         )
         if round_index < args.rounds and args.cooldown_seconds:
@@ -790,7 +880,7 @@ def main() -> None:
         default=None,
     )
     summary = {
-        "schema_version": 3,
+        "schema_version": 4,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
             "benchmark_config": "dp8_decode_c256",
@@ -810,6 +900,8 @@ def main() -> None:
             "window_s": args.window_seconds,
             "step_s": args.step_seconds,
             "boundary": "peak_active_complete_sliding_windows",
+            "token_accounting": "continuous_usage_completion_tokens",
+            "server_side_admission_barrier": True,
         },
         "best": (
             {
@@ -817,9 +909,9 @@ def main() -> None:
                 "concurrency": args.concurrency,
                 "failed": best_round["failed_requests"],
                 "file": "rounds.csv",
-                "mean_tpot_ms": best_round["request_tpot_ms"]["avg"],
+                "mean_tpot_ms": best_round["peak_active_tpot_ms"]["p50"],
                 "output_throughput": best_round["window_throughput_tok_s"]["p50"],
-                "p99_tpot_ms": best_round["request_tpot_ms"]["p99"],
+                "p99_tpot_ms": best_round["peak_active_tpot_ms"]["p99"],
                 "round": best_round["round"],
             }
             if best_round is not None
@@ -831,6 +923,31 @@ def main() -> None:
             "window_throughput_tok_s": metric_stats(all_throughputs),
             "request_tpot_ms": metric_stats(
                 [float(row["tpot_ms"]) for row in all_request_tpots]
+            ),
+            "peak_active_tpot_p50_ms": metric_stats(
+                [
+                    float(row["peak_active_tpot_ms"]["p50"])
+                    for row in valid_rounds
+                    if row["peak_active_tpot_ms"]["p50"] is not None
+                ]
+            ),
+            "end_to_end_throughput_tok_s": metric_stats(
+                [
+                    float(row["end_to_end_throughput_tok_s"])
+                    for row in valid_rounds
+                ]
+            ),
+            "active_requests_max": metric_stats(
+                [float(row["active_requests_max"]) for row in valid_rounds]
+            ),
+            "first_token_skew_s": metric_stats(
+                [float(row["first_token_skew_s"]) for row in valid_rounds]
+            ),
+            "ttft_p50_s": metric_stats(
+                [float(row["ttft_s"]["p50"]) for row in valid_rounds]
+            ),
+            "ttft_p90_s": metric_stats(
+                [float(row["ttft_s"]["p90"]) for row in valid_rounds]
             ),
             "round_p50_throughput_tok_s": metric_stats(
                 [float(row["window_throughput_tok_s"]["p50"]) for row in valid_rounds]
@@ -864,7 +981,8 @@ def main() -> None:
     print(
         "[done] "
         f"throughput_p50={aggregate['window_throughput_tok_s']['p50']:.3f} tok/s "
-        f"request_tpot_avg={aggregate['request_tpot_ms']['avg']:.3f} ms "
+        f"peak_active_tpot_p50_avg="
+        f"{aggregate['peak_active_tpot_p50_ms']['avg']:.3f} ms "
         f"output={args.output_dir}",
         flush=True,
     )

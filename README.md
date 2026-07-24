@@ -116,11 +116,17 @@ it keeps the final PCP8 server alive.
 
 Decode 每条请求使用不同但可重复生成的自然语言前缀，服务关闭 prefix cache，
 不会因同 prompt 复用 KV cache；client 通过 `X-data-parallel-rank` 将
-256 条请求精确均分为每个 DP rank 32 条。若 256 条请求没有形成完整 10 秒
-重叠区间，
+256 条请求精确均分为每个 DP rank 32 条。服务端 admission barrier 等待本轮
+256 条请求全部完成 HTTP 解析后再统一加入 engine，避免 64K 请求的解析偏斜
+造成各 DP rank 的 Prefill/Decode 波次错位。客户端从 streaming cumulative
+`usage.completion_tokens` 展开 token 时间线，与 tpu-misc C256 记录使用相同
+计数口径。
+
+若 256 条请求没有形成完整 10 秒重叠区间，
 `summary.json` 中的 `active_requests_max` 和
 `timeline_valid_full_concurrency_decode` 会记录实际峰值并发，主吞吐取该峰值
-并发平台窗口的 P50。原始请求、窗口和逐请求 TPOT 分别位于
+并发平台窗口的 P50；主 TPOT 统计相同 peak-active 时间范围内的 token 间隔，
+逐请求全生命周期 TPOT 作为补充。原始请求、窗口和逐请求 TPOT 分别位于
 `raw_requests.jsonl`、`timeline.csv` 和 `request_tpot.csv`。
 
 三组测试的结果使用严格对齐的同级目录，每个目录都在根部提供

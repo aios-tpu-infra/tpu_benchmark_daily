@@ -88,16 +88,24 @@ class StreamTokenAccountingTest(unittest.TestCase):
             ['{"choices":[{"token_ids":[101]}]}', "[DONE]"],
         )
 
-    def test_records_every_token_id_in_a_coalesced_stream_chunk(self) -> None:
-        timestamps = BENCH.token_timestamps_from_choice(
-            {"token_ids": [101, 102, 103]}, 12.5
+    def test_expands_cumulative_completion_usage_delta(self) -> None:
+        delta, total = BENCH.completion_token_delta(
+            {
+                "choices": [{"text": "answer"}],
+                "usage": {"completion_tokens": 7},
+            },
+            4,
         )
 
-        self.assertEqual(timestamps, [12.5, 12.5, 12.5])
+        self.assertEqual((delta, total), (3, 7))
 
-    def test_rejects_stream_chunk_without_token_ids(self) -> None:
-        with self.assertRaisesRegex(ValueError, "missing token_ids"):
-            BENCH.token_timestamps_from_choice({"text": "answer"}, 12.5)
+    def test_ignores_usage_only_final_event(self) -> None:
+        delta, total = BENCH.completion_token_delta(
+            {"choices": [], "usage": {"completion_tokens": 7}},
+            6,
+        )
+
+        self.assertEqual((delta, total), (0, 6))
 
 
 class SlidingWindowAnalysisTest(unittest.TestCase):
@@ -113,7 +121,6 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
             round_index=1,
             results=results,
             concurrency=2,
-            decode_tokens=13,
             window_s=2.0,
             step_s=1.0,
         )
@@ -149,7 +156,6 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
             round_index=1,
             results=results,
             concurrency=3,
-            decode_tokens=7,
             window_s=2.0,
             step_s=1.0,
         )
@@ -174,7 +180,6 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
             round_index=4,
             results=results,
             concurrency=2,
-            decode_tokens=4,
             window_s=3.0,
             step_s=1.0,
         )
@@ -190,7 +195,7 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
         self.assertEqual(analysis.summary["request_tpot_ms"]["count"], 2)
         self.assertEqual(analysis.summary["request_tpot_ms"]["avg"], 750.0)
 
-    def test_rejects_incomplete_request(self) -> None:
+    def test_accepts_nonempty_usage_stream_with_short_final_count(self) -> None:
         results = [
             BENCH.RequestResult(0, 0.0, 3.0, [0.0, 1.0, 2.0], None),
             BENCH.RequestResult(1, 0.0, 2.0, [0.0, 1.0], None),
@@ -200,16 +205,14 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
             round_index=1,
             results=results,
             concurrency=2,
-            decode_tokens=3,
             window_s=1.0,
             step_s=0.5,
         )
 
-        self.assertFalse(analysis.summary["valid"])
-        self.assertEqual(analysis.summary["invalid_reason"], "incomplete_requests")
-        self.assertEqual(len(analysis.request_tpots), 1)
-        self.assertEqual(analysis.request_tpots[0]["request_id"], 0)
-        self.assertEqual(analysis.summary["request_tpot_ms"]["count"], 1)
+        self.assertTrue(analysis.summary["valid"])
+        self.assertEqual(analysis.summary["successful_requests"], 2)
+        self.assertEqual(len(analysis.request_tpots), 2)
+        self.assertEqual(analysis.summary["usage_tokens"], 5)
 
 
 class CsvOutputTest(unittest.TestCase):

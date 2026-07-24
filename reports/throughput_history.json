@@ -57,8 +57,10 @@
           "total_token_throughput": 49381.83103775198
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6295.275573735125,
@@ -129,8 +131,10 @@
           "total_token_throughput": 49372.29309639097
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6292.118382436456,
@@ -201,8 +205,10 @@
           "total_token_throughput": 49360.61444160256
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6310.011965862941,
@@ -273,8 +279,10 @@
           "total_token_throughput": 44371.29208413848
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6999.24348013883,
@@ -345,8 +353,10 @@
           "total_token_throughput": 44397.925012023195
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6984.199464359449,
@@ -417,8 +427,10 @@
           "total_token_throughput": 44436.44289640972
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6981.610803406234,
@@ -489,8 +501,10 @@
           "total_token_throughput": 43690.577693431354
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 7096.706042719006,
@@ -561,8 +575,10 @@
           "total_token_throughput": 40378.43035915213
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 7104.1095279529145,
@@ -633,8 +649,10 @@
           "total_token_throughput": 46119.21726680975
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2731.707107438069,
@@ -705,8 +723,10 @@
           "total_token_throughput": 34201.46993504954
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 3615.183541905026,
@@ -777,8 +797,10 @@
           "total_token_throughput": 48303.34590325933
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 4904.060522997497,
@@ -849,8 +871,10 @@
           "total_token_throughput": 49045.934164908096
         }
       ],
-      "decode_min_tpot_ms": 20.507219412704643,
-      "decode_peak_output_throughput": 637.6851851851852,
+      "decode_legacy_min_tpot_ms": 20.507219412704643,
+      "decode_legacy_peak_output_throughput": 637.6851851851852,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2453.502184906938,
@@ -921,8 +945,10 @@
           "total_token_throughput": 34170.019084331434
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6774.874276477021,
@@ -993,8 +1019,10 @@
           "total_token_throughput": 48973.92057992439
         }
       ],
-      "decode_min_tpot_ms": 18.721084775569732,
-      "decode_peak_output_throughput": 637.3214285714286,
+      "decode_legacy_min_tpot_ms": 18.721084775569732,
+      "decode_legacy_peak_output_throughput": 637.3214285714286,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2454.4716143186633,
@@ -1065,8 +1093,10 @@
           "total_token_throughput": 34219.120044417636
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 3615.3348003344945,
@@ -1137,8 +1167,10 @@
           "total_token_throughput": 49024.80919004891
         }
       ],
-      "decode_min_tpot_ms": 18.413093352138254,
-      "decode_peak_output_throughput": 632.2387096774194,
+      "decode_legacy_min_tpot_ms": 18.413093352138254,
+      "decode_legacy_peak_output_throughput": 632.2387096774194,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 2452.6762632349346,
@@ -1209,8 +1241,10 @@
           "total_token_throughput": 34055.678184575074
         }
       ],
-      "decode_min_tpot_ms": null,
-      "decode_peak_output_throughput": null,
+      "decode_legacy_min_tpot_ms": null,
+      "decode_legacy_peak_output_throughput": null,
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.22",
       "mean_ttft_ms": 6801.577410988557,
@@ -1225,6 +1259,6 @@
       "torchtpu_vllm_revision": "d87b06bee7c4748cd8f3af3cd1862abc865f49f6"
     }
   ],
-  "schema_version": 3,
+  "schema_version": 4,
   "updated_at": "2026-07-24T01:27:05+00:00"
 }

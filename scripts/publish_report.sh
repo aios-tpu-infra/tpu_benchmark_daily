@@ -13,6 +13,7 @@ required_reports=(
   latest.json
   throughput.svg
   throughput_history.svg
+  decode_throughput_history.svg
   throughput_history.csv
   throughput_history.json
 )

@@ -24,6 +24,8 @@ from typing import Any
 SCHEMA_VERSION = 4
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
+LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
+LEGACY_DECODE_TPOT_FIELD = "decode_legacy_min_tpot_ms"
 BENCHMARK_CONFIGS = {
     "dp8": {"label": "DP8", "color": "#1570ef"},
     "pcp8": {"label": "PCP8", "color": "#7a5af8"},
@@ -42,6 +44,8 @@ CSV_FIELDS = (
     "best_concurrency",
     "mean_ttft_ms",
     "p99_ttft_ms",
+    LEGACY_DECODE_THROUGHPUT_FIELD,
+    LEGACY_DECODE_TPOT_FIELD,
     "decode_window_p50_throughput",
     "decode_peak_active_tpot_p50_ms",
     "torchtpu_vllm_revision",
@@ -361,6 +365,8 @@ def build_record(
         "best_concurrency": positive_int(best["concurrency"], "best_concurrency"),
         "mean_ttft_ms": finite_float(best["mean_ttft_ms"], "mean_ttft_ms"),
         "p99_ttft_ms": finite_float(best["p99_ttft_ms"], "p99_ttft_ms"),
+        LEGACY_DECODE_THROUGHPUT_FIELD: None,
+        LEGACY_DECODE_TPOT_FIELD: None,
         "decode_window_p50_throughput": decode_window_p50_throughput,
         "decode_peak_active_tpot_p50_ms": decode_peak_active_tpot_p50_ms,
         "torchtpu_vllm_revision": str(
@@ -393,6 +399,22 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         run["benchmark_config"] = normalize_benchmark_config(
             run.get("benchmark_config") or infer_legacy_benchmark_config(run)
         )
+        legacy_decode_throughput = run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
+        if legacy_decode_throughput is None:
+            legacy_decode_throughput = run.get("decode_peak_output_throughput")
+        legacy_decode_tpot = run.get(LEGACY_DECODE_TPOT_FIELD)
+        if legacy_decode_tpot is None:
+            legacy_decode_tpot = run.get("decode_min_tpot_ms")
+        run[LEGACY_DECODE_THROUGHPUT_FIELD] = optional_finite_float(
+            legacy_decode_throughput,
+            LEGACY_DECODE_THROUGHPUT_FIELD,
+        )
+        run[LEGACY_DECODE_TPOT_FIELD] = optional_finite_float(
+            legacy_decode_tpot,
+            LEGACY_DECODE_TPOT_FIELD,
+        )
+        run.pop("decode_peak_output_throughput", None)
+        run.pop("decode_min_tpot_ms", None)
         run["decode_window_p50_throughput"] = optional_finite_float(
             run.get("decode_window_p50_throughput"),
             "decode_window_p50_throughput",
@@ -415,6 +437,21 @@ def update_history(
     existing = by_key.get(key)
     if not record.get("machine_ip") and existing and existing.get("machine_ip"):
         record = {**record, "machine_ip": existing["machine_ip"]}
+    if existing:
+        decode_fields = (
+            LEGACY_DECODE_THROUGHPUT_FIELD,
+            LEGACY_DECODE_TPOT_FIELD,
+            "decode_window_p50_throughput",
+            "decode_peak_active_tpot_p50_ms",
+        )
+        record = {
+            **record,
+            **{
+                field: existing.get(field)
+                for field in decode_fields
+                if record.get(field) is None and existing.get(field) is not None
+            },
+        }
     by_key[key] = record
     return sorted(
         by_key.values(),
@@ -584,6 +621,25 @@ def chart_svg(
     return "".join(parts)
 
 
+def empty_chart_svg(*, title: str, description: str, id_prefix: str) -> str:
+    return "".join(
+        [
+            '<?xml version="1.0" encoding="UTF-8"?>\n',
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 390" ',
+            f'role="img" aria-labelledby="{id_prefix}-title {id_prefix}-desc">',
+            f'<title id="{id_prefix}-title">{html.escape(title)}</title>',
+            f'<desc id="{id_prefix}-desc">{html.escape(description)}</desc>',
+            '<rect fill="#fff" width="1000" height="390" rx="12"/>',
+            '<text fill="#102a43" font-family="system-ui,sans-serif" ',
+            'font-size="19" font-weight="600" x="82" y="45">',
+            f"{html.escape(title)}</text>",
+            '<text fill="#52606d" font-family="system-ui,sans-serif" ',
+            'font-size="15" x="82" y="100">No decode benchmark data yet.</text>',
+            "</svg>",
+        ]
+    )
+
+
 def latest_runs_by_config(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
@@ -644,6 +700,61 @@ def history_chart_data(
                 ],
             }
         )
+    return series, x_labels
+
+
+def decode_history_chart_data(
+    runs: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    decode_runs = [
+        run
+        for run in runs
+        if run["benchmark_config"] == "dp8"
+        and (
+            run.get(LEGACY_DECODE_THROUGHPUT_FIELD) is not None
+            or run.get("decode_window_p50_throughput") is not None
+        )
+    ]
+    run_ids = [str(run["run_id"]) for run in decode_runs]
+    index_by_run_id = {run_id: index for index, run_id in enumerate(run_ids)}
+    x_labels = [display_time(run["completed_at"])[5:] for run in decode_runs]
+    metric_series = (
+        (
+            "legacy",
+            "Legacy decode peak output",
+            "#dc6803",
+            LEGACY_DECODE_THROUGHPUT_FIELD,
+        ),
+        (
+            "peak-active-p50",
+            "C256 peak-active window P50",
+            "#039855",
+            "decode_window_p50_throughput",
+        ),
+    )
+    series = []
+    for config, label, color, field in metric_series:
+        points = [
+            {
+                "x_index": index_by_run_id[str(run["run_id"])],
+                "value": run[field],
+                "tooltip": (
+                    f"{label} · {run['run_id']}: "
+                    f"{run[field]:,.2f} tok/s"
+                ),
+            }
+            for run in decode_runs
+            if run.get(field) is not None
+        ]
+        if points:
+            series.append(
+                {
+                    "config": config,
+                    "label": label,
+                    "color": color,
+                    "points": points,
+                }
+            )
     return series, x_labels
 
 
@@ -709,6 +820,10 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "concurrency": run["best_concurrency"],
         "mean_ttft_ms": run["mean_ttft_ms"],
         "p99_ttft_ms": run["p99_ttft_ms"],
+        LEGACY_DECODE_THROUGHPUT_FIELD: run.get(
+            LEGACY_DECODE_THROUGHPUT_FIELD
+        ),
+        LEGACY_DECODE_TPOT_FIELD: run.get(LEGACY_DECODE_TPOT_FIELD),
         "decode_window_p50_throughput": run.get(
             "decode_window_p50_throughput"
         ),
@@ -808,13 +923,28 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         dp_tpot_p50 = (
             dp_run.get("decode_peak_active_tpot_p50_ms") if dp_run else None
         )
+        legacy_dp_decode = (
+            dp_run.get(LEGACY_DECODE_THROUGHPUT_FIELD) if dp_run else None
+        )
+        legacy_dp_tpot = (
+            dp_run.get(LEGACY_DECODE_TPOT_FIELD) if dp_run else None
+        )
+        if dp_decode is not None:
+            decode_protocol = "C256 peak-active P50"
+        elif legacy_dp_decode is not None:
+            dp_decode = legacy_dp_decode
+            dp_tpot_p50 = legacy_dp_tpot
+            decode_protocol = "legacy peak/min"
+        else:
+            decode_protocol = "—"
         rows.append(
             f"| {revision_display} | "
             f"{display_time(grouped_run['started_at'])} | "
             f"{table_metric(dp_prefill)} | "
             f"{table_metric(pcp_prefill)} | "
             f"{table_metric(dp_decode)} | "
-            f"{table_metric(dp_tpot_p50)} |"
+            f"{table_metric(dp_tpot_p50)} | "
+            f"{decode_protocol} |"
         )
 
     return "\n".join(
@@ -830,18 +960,23 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "![Recent DP8 vs PCP8 peak throughput over time]"
             "(reports/throughput_history.svg)",
             "",
+            "Recent DP8 decode throughput over time:",
+            "",
+            "![Recent DP8 decode throughput over time]"
+            "(reports/decode_throughput_history.svg)",
+            "",
             *latest_lines,
             "",
             "| vllm-torchtpu commit | Test time (UTC) | "
             "DP peak prefill tok/s | PCP peak prefill tok/s | "
-            "DP decode peak-active window P50 tok/s | "
-            "DP peak-active TPOT P50 (ms) |",
-            "|---|---|---:|---:|---:|---:|",
+            "DP decode tok/s | DP decode TPOT (ms) | Decode protocol |",
+            "|---|---|---:|---:|---:|---:|---|",
             *rows,
             "",
-            "The charts compare the latest successful DP8 and PCP8 throughput "
-            "across concurrency levels and track recent peak throughput over "
-            "time; see "
+            "The prefill charts compare the latest successful DP8 and PCP8 "
+            "throughput and track their recent peaks. The decode chart keeps "
+            "legacy peak-output and current peak-active P50 statistics in "
+            "separate series; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
             "[`reports/throughput_history.json`](reports/throughput_history.json) "
             "for the full history.",
@@ -873,6 +1008,7 @@ def main() -> None:
     csv_path = reports_dir / "throughput_history.csv"
     svg_path = reports_dir / "throughput.svg"
     history_svg_path = reports_dir / "throughput_history.svg"
+    decode_history_svg_path = reports_dir / "decode_throughput_history.svg"
     readme_path = project_root / "README.md"
     lock_path = project_root / ".state" / "benchmark_report.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -899,6 +1035,10 @@ def main() -> None:
         visible_runs = visible_history_runs(runs, args.display_limit)
         history_series, history_labels = history_chart_data(visible_runs)
         visible_run_count = len({run["run_id"] for run in visible_runs})
+        decode_history_series, decode_history_labels = decode_history_chart_data(
+            visible_runs
+        )
+        decode_run_count = len(decode_history_labels)
 
         atomic_write(history_path, render_history_json(runs))
         atomic_write(latest_path, render_latest_json(runs))
@@ -931,6 +1071,29 @@ def main() -> None:
                 id_prefix="history",
             ),
         )
+        decode_history_title = (
+            f"DP8 decode throughput over time — last {decode_run_count} runs"
+        )
+        decode_history_description = (
+            "Legacy peak-output throughput and current C256 peak-active "
+            "window P50 throughput are separate series because their "
+            "statistics are not directly comparable."
+        )
+        if decode_history_series:
+            decode_history_svg = chart_svg(
+                decode_history_series,
+                decode_history_labels,
+                title=decode_history_title,
+                description=decode_history_description,
+                id_prefix="decode-history",
+            )
+        else:
+            decode_history_svg = empty_chart_svg(
+                title=decode_history_title,
+                description=decode_history_description,
+                id_prefix="decode-history",
+            )
+        atomic_write(decode_history_svg_path, decode_history_svg)
         update_readme(
             readme_path,
             render_readme_block(runs, args.table_limit),
@@ -943,6 +1106,7 @@ def main() -> None:
     )
     print(f"Latest throughput chart: {svg_path}")
     print(f"Throughput history chart: {history_svg_path}")
+    print(f"Decode throughput history chart: {decode_history_svg_path}")
 
 
 if __name__ == "__main__":

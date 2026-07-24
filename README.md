@@ -21,23 +21,27 @@ Recent DP8 vs PCP8 peak throughput over time:
 
 ![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)
 
+Recent DP8 decode throughput over time:
+
+![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
+
 Latest successful DP8: **51,494.71 total tok/s** at concurrency **16** (`20260724T003214Z`).
 Latest successful PCP8: **34,121.60 total tok/s** at concurrency **32** (`20260724T003214Z`).
 
-| vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP peak decode tok/s | DP min TPOT (ms) |
-|---|---|---:|---:|---:|---:|
-| `d87b06bee7c4` | 2026-07-24 00:32 | 51,494.71 | 34,121.60 | 632.24 | 18.41 |
-| `a03d8effc78a` | 2026-07-23 08:34 | 51,458.93 | 34,291.21 | 637.32 | 18.72 |
-| `a03d8effc78a` | 2026-07-23 06:45 | 51,476.87 | 34,276.38 | 637.69 | 20.51 |
-| — | 2026-07-22 08:15 | 48,359.05 | — | — | — |
-| `db5ae0ab3941` | 2026-07-22 05:07 | — | 34,296.71 | — | — |
-| `db5ae0ab3941` | 2026-07-22 01:40 | 46,240.26 | — | — | — |
-| `db0149493e41` | 2026-07-21 18:00 | 40,378.43 | — | — | — |
-| `a2bdc585f7f8` | 2026-07-20 18:00 | 43,690.58 | — | — | — |
-| `d296ce153cdd` | 2026-07-19 18:00 | 44,436.44 | — | — | — |
-| `d296ce153cdd` | 2026-07-18 18:00 | 44,397.93 | — | — | — |
+| vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol |
+|---|---|---:|---:|---:|---:|---|
+| `d87b06bee7c4` | 2026-07-24 00:32 | 51,494.71 | 34,121.60 | 632.24 | 18.41 | legacy peak/min |
+| `a03d8effc78a` | 2026-07-23 08:34 | 51,458.93 | 34,291.21 | 637.32 | 18.72 | legacy peak/min |
+| `a03d8effc78a` | 2026-07-23 06:45 | 51,476.87 | 34,276.38 | 637.69 | 20.51 | legacy peak/min |
+| — | 2026-07-22 08:15 | 48,359.05 | — | — | — | — |
+| `db5ae0ab3941` | 2026-07-22 05:07 | — | 34,296.71 | — | — | — |
+| `db5ae0ab3941` | 2026-07-22 01:40 | 46,240.26 | — | — | — | — |
+| `db0149493e41` | 2026-07-21 18:00 | 40,378.43 | — | — | — | — |
+| `a2bdc585f7f8` | 2026-07-20 18:00 | 43,690.58 | — | — | — | — |
+| `d296ce153cdd` | 2026-07-19 18:00 | 44,436.44 | — | — | — | — |
+| `d296ce153cdd` | 2026-07-18 18:00 | 44,397.93 | — | — | — | — |
 
-The charts compare the latest successful DP8 and PCP8 throughput across concurrency levels and track recent peak throughput over time; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
+The prefill charts compare the latest successful DP8 and PCP8 throughput and track their recent peaks. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
 
 ## Layout
@@ -201,13 +205,17 @@ therefore shows both charts without HTML or a separate web service. Set
 `PUBLISH_REPORTS=0` to disable commit and push for a local-only run.
 
 The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
-The generated images are `reports/throughput.svg` and
-`reports/throughput_history.svg`; every successful report update replaces both
-files atomically. Automatic publication uses the repository's configured Git
-SSH credentials. It refuses to run when `main` differs from the remote, the
-index is not empty, or unrelated project files are modified. The
-`vllm-torchtpu` submodule pointer may be modified by its daily update, but it is
-never included in the generated-report commit.
+The generated images are `reports/throughput.svg`,
+`reports/throughput_history.svg`, and
+`reports/decode_throughput_history.svg`; every successful report update
+replaces all three files atomically. Decode history renders the legacy
+peak-output metric and the current C256 peak-active window P50 metric as
+separate series because the two statistics are not directly comparable.
+Automatic publication uses the repository's configured Git SSH credentials. It
+refuses to run when `main` differs from the remote, the index is not empty, or
+unrelated project files are modified. The `vllm-torchtpu` submodule pointer may
+be modified by its daily update, but it is never included in the generated-report
+commit.
 
 ## Example crontab
 

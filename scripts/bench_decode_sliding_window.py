@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Measure full-overlap decode throughput and TPOT with sliding windows.
+"""Measure peak-active decode throughput and TPOT with sliding windows.
 
-Every request in one benchmark uses the same natural-language-derived token
+Every request uses a deterministic but distinct natural-language-derived token
 prompt and the same decode length. The workload dimensions are intentionally
 limited to prompt length, decode length, and concurrency so future daily cases
 can reuse this script without inheriting unrelated benchmark modes.
@@ -21,19 +21,25 @@ from pathlib import Path
 import statistics
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 import requests
 
 
 PROMPT_TEXT = (
-    "The benchmark uses a long, ordinary English passage to exercise prefill "
-    "before measuring decode throughput. The passage discusses software "
-    "systems, scheduling decisions, distributed execution, and careful "
-    "measurement methodology in plain language. Each paragraph is stable and "
-    "deterministic so every request receives exactly the same input. The goal "
-    "is to keep the prompt natural enough for tokenizer behavior to resemble "
-    "real text while preserving a controlled token length. "
+    "The benchmark uses a long, ordinary English passage to exercise "
+    "prefill before measuring decode throughput. The passage discusses "
+    "software systems, scheduling decisions, distributed execution, and "
+    "careful measurement methodology in plain language. Each paragraph is "
+    "stable and deterministic, while the request-specific prefix remains "
+    "different. The goal is to keep the input natural enough for tokenizer "
+    "behavior to resemble real text while preserving a controlled length. "
+)
+REQUEST_PREFIX_TEMPLATE = (
+    "Unique benchmark prefix for request {request_id:04d}. "
+    "This opening sentence is deliberately different so the prefix "
+    "cache does not share the beginning of this request with any "
+    "other request. "
 )
 
 
@@ -83,9 +89,41 @@ def repeat_and_truncate_token_ids(
     return (source_token_ids * repeats)[:target_tokens]
 
 
-def build_prompt_token_ids(
-    *, tokenizer_dir: Path, target_tokens: int
-) -> tuple[list[int], int]:
+def build_unique_prompt_token_ids(
+    *,
+    encode_text: Callable[[str], list[int]],
+    target_tokens: int,
+    concurrency: int,
+) -> tuple[list[list[int]], int]:
+    source_token_ids = encode_text(PROMPT_TEXT)
+    if not source_token_ids:
+        raise ValueError("fixed prompt text produced no tokens")
+
+    prompts: list[list[int]] = []
+    for request_id in range(concurrency):
+        prefix_token_ids = encode_text(
+            REQUEST_PREFIX_TEMPLATE.format(request_id=request_id)
+        )
+        if not prefix_token_ids:
+            raise ValueError(
+                f"request {request_id} unique prefix produced no tokens"
+            )
+        if len(prefix_token_ids) >= target_tokens:
+            prompt = prefix_token_ids[:target_tokens]
+        else:
+            prompt = prefix_token_ids + repeat_and_truncate_token_ids(
+                source_token_ids, target_tokens - len(prefix_token_ids)
+            )
+        prompts.append(prompt)
+
+    if len({tuple(prompt) for prompt in prompts}) != concurrency:
+        raise ValueError("tokenizer did not produce unique request prompts")
+    return prompts, len(source_token_ids)
+
+
+def load_unique_prompt_token_ids(
+    *, tokenizer_dir: Path, target_tokens: int, concurrency: int
+) -> tuple[list[list[int]], int]:
     from transformers import AutoTokenizer
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -93,11 +131,13 @@ def build_prompt_token_ids(
         trust_remote_code=False,
         local_files_only=True,
     )
-    source_token_ids = tokenizer.encode(PROMPT_TEXT, add_special_tokens=False)
-    prompt_token_ids = repeat_and_truncate_token_ids(
-        source_token_ids, target_tokens
+    return build_unique_prompt_token_ids(
+        encode_text=lambda text: tokenizer.encode(
+            text, add_special_tokens=False
+        ),
+        target_tokens=target_tokens,
+        concurrency=concurrency,
     )
-    return prompt_token_ids, len(source_token_ids)
 
 
 def percentile(values: list[float], pct: float) -> float | None:
@@ -179,6 +219,7 @@ def streamed_completion(
     request_id: int,
     endpoint: str,
     request_body: bytes,
+    data_parallel_rank: int,
     start_barrier: threading.Barrier,
     timeout_s: float,
 ) -> RequestResult:
@@ -198,6 +239,7 @@ def streamed_completion(
             headers={
                 "Accept": "text/event-stream",
                 "Content-Type": "application/json",
+                "X-data-parallel-rank": str(data_parallel_rank),
             },
             stream=True,
             timeout=(10.0, timeout_s),
@@ -232,10 +274,15 @@ def streamed_completion(
 def run_round(
     *,
     endpoint: str,
-    request_body: bytes,
+    request_bodies: list[bytes],
     concurrency: int,
+    data_parallel_size: int,
     timeout_s: float,
 ) -> list[RequestResult]:
+    if len(request_bodies) != concurrency:
+        raise ValueError(
+            f"expected {concurrency} request bodies, got {len(request_bodies)}"
+        )
     barrier = threading.Barrier(concurrency)
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as pool:
         futures = [
@@ -243,7 +290,8 @@ def run_round(
                 streamed_completion,
                 request_id=request_id,
                 endpoint=endpoint,
-                request_body=request_body,
+                request_body=request_bodies[request_id],
+                data_parallel_rank=request_id % data_parallel_size,
                 start_barrier=barrier,
                 timeout_s=timeout_s,
             )
@@ -291,6 +339,9 @@ def analyze_round(
         "full_overlap_start_after_batch_start_s": None,
         "full_overlap_end_after_batch_start_s": None,
         "full_overlap_duration_s": 0.0,
+        "active_requests_max": 0,
+        "timeline_valid_full_concurrency_decode": False,
+        "full_concurrency_window_count": 0,
         "window_count": 0,
         "window_throughput_tok_s": metric_stats([]),
         "request_tpot_ms": metric_stats(
@@ -314,36 +365,68 @@ def analyze_round(
             "full_overlap_duration_s": full_duration_s,
         }
     )
-    if full_duration_s < window_s:
-        summary["invalid_reason"] = "full_overlap_shorter_than_window"
-        return RoundAnalysis(summary, [], request_tpots)
-
     all_token_times = sorted(
         timestamp for result in results for timestamp in result.token_times_s
     )
-    windows: list[dict[str, Any]] = []
-    cursor_s = full_start_s
-    while cursor_s + window_s <= full_end_s + 1e-9:
+    decode_intervals = [
+        (result.token_times_s[1], result.token_times_s[-1])
+        for result in results
+    ]
+    scan_start_s = min(start_s for start_s, _ in decode_intervals)
+    scan_end_s = max(end_s for _, end_s in decode_intervals)
+    if scan_end_s - scan_start_s < window_s:
+        summary["invalid_reason"] = "decode_span_shorter_than_window"
+        return RoundAnalysis(summary, [], request_tpots)
+
+    candidate_windows: list[dict[str, Any]] = []
+    cursor_s = scan_start_s
+    while cursor_s + window_s <= scan_end_s + 1e-9:
         end_s = cursor_s + window_s
+        active_requests = sum(
+            interval_start_s <= cursor_s and interval_end_s >= end_s
+            for interval_start_s, interval_end_s in decode_intervals
+        )
+        if active_requests == 0:
+            cursor_s += step_s
+            continue
         token_left = bisect.bisect_left(all_token_times, cursor_s)
         token_right = bisect.bisect_left(all_token_times, end_s)
         token_count = token_right - token_left
-        windows.append(
+        candidate_windows.append(
             {
                 "round": round_index,
-                "window": len(windows) + 1,
+                "window": len(candidate_windows) + 1,
                 "start_after_batch_start_s": cursor_s - batch_start_s,
                 "end_after_batch_start_s": end_s - batch_start_s,
-                "active_requests": concurrency,
+                "active_requests": active_requests,
                 "token_count": token_count,
                 "throughput_tok_s": token_count / window_s,
             }
         )
         cursor_s += step_s
 
+    active_requests_max = max(
+        (int(window["active_requests"]) for window in candidate_windows),
+        default=0,
+    )
+    windows = [
+        window
+        for window in candidate_windows
+        if window["active_requests"] == active_requests_max
+    ]
+    for index, window in enumerate(windows, start=1):
+        window["window"] = index
     throughputs = [float(window["throughput_tok_s"]) for window in windows]
     summary.update(
         {
+            "active_requests_max": active_requests_max,
+            "timeline_valid_full_concurrency_decode": (
+                active_requests_max == concurrency
+            ),
+            "full_concurrency_window_count": sum(
+                window["active_requests"] == concurrency
+                for window in candidate_windows
+            ),
             "window_count": len(windows),
             "window_throughput_tok_s": metric_stats(throughputs),
             "valid": bool(windows),
@@ -401,12 +484,16 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         "successful_requests",
         "failed_requests",
         "full_overlap_duration_s",
+        "active_requests_max",
+        "timeline_valid_full_concurrency_decode",
+        "full_concurrency_window_count",
         "window_count",
         "throughput_count",
         "throughput_avg_tok_s",
         "throughput_min_tok_s",
         "throughput_max_tok_s",
         "throughput_stddev_tok_s",
+        "throughput_p50_tok_s",
         "throughput_p90_tok_s",
         "throughput_p99_tok_s",
         "request_tpot_count",
@@ -432,12 +519,20 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
                     "successful_requests": row["successful_requests"],
                     "failed_requests": row["failed_requests"],
                     "full_overlap_duration_s": row["full_overlap_duration_s"],
+                    "active_requests_max": row["active_requests_max"],
+                    "timeline_valid_full_concurrency_decode": row[
+                        "timeline_valid_full_concurrency_decode"
+                    ],
+                    "full_concurrency_window_count": row[
+                        "full_concurrency_window_count"
+                    ],
                     "window_count": row["window_count"],
                     "throughput_count": throughput["count"],
                     "throughput_avg_tok_s": throughput["avg"],
                     "throughput_min_tok_s": throughput["min"],
                     "throughput_max_tok_s": throughput["max"],
                     "throughput_stddev_tok_s": throughput["stddev"],
+                    "throughput_p50_tok_s": throughput["p50"],
                     "throughput_p90_tok_s": throughput["p90"],
                     "throughput_p99_tok_s": throughput["p99"],
                     "request_tpot_count": request_tpot["count"],
@@ -495,12 +590,19 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
         f"- 模型：`{benchmark['model']}`",
         f"- 并发：`{benchmark['concurrency']}`",
+        f"- DP size：`{benchmark['data_parallel_size']}`",
         f"- Prefill：`{benchmark['prefill_tokens']}` tokens",
         f"- Decode：`{benchmark['decode_tokens']}` tokens",
-        "- Prompt：固定英文自然语言文本 tokenize 后重复并截断，所有请求相同。",
+        (
+            "- Prompt：每条请求使用不同的确定性自然语言标识前缀，"
+            "随后用固定英文文本 tokenize 后重复并截断到目标长度。"
+        ),
         f"- Tokenizer：`{benchmark['tokenizer_dir']}`",
         f"- 滑动窗口：`{benchmark['window_s']}` 秒，步长 `{benchmark['step_s']}` 秒",
-        "- 边界：最慢请求第 2 个输出 token 至最快请求最后一个输出 token。",
+        (
+            "- 窗口选择：扫描各请求第 2 个输出 token 至最后一个输出 token，"
+            "保留能完整覆盖整个窗口的活跃请求数达到本轮峰值的窗口。"
+        ),
         (
             "- Request TPOT：每条成功请求使用完整输出的首尾 token 时间跨度，"
             "除以输出 token 间隔数；不依赖吞吐窗口是否有效。"
@@ -508,13 +610,15 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "",
         "## 聚合指标",
         "",
-        "|指标|count|avg|min|max|stddev|p90|p99|",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "|指标|count|avg|min|max|stddev|p50|p90|p99|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
         (
             "|Decode throughput (tok/s)|"
             f"{throughput['count']}|{format_metric(throughput['avg'])}|"
             f"{format_metric(throughput['min'])}|{format_metric(throughput['max'])}|"
-            f"{format_metric(throughput['stddev'])}|{format_metric(throughput['p90'])}|"
+            f"{format_metric(throughput['stddev'])}|"
+            f"{format_metric(throughput['p50'])}|"
+            f"{format_metric(throughput['p90'])}|"
             f"{format_metric(throughput['p99'])}|"
         ),
         (
@@ -523,6 +627,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{format_metric(request_tpot['min'])}|"
             f"{format_metric(request_tpot['max'])}|"
             f"{format_metric(request_tpot['stddev'])}|"
+            f"{format_metric(request_tpot['p50'])}|"
             f"{format_metric(request_tpot['p90'])}|"
             f"{format_metric(request_tpot['p99'])}|"
         ),
@@ -535,6 +640,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"  --model {benchmark['model']} \\",
         "  --output-dir <OUTPUT_DIR> \\",
         f"  --concurrency {benchmark['concurrency']} \\",
+        f"  --data-parallel-size {benchmark['data_parallel_size']} \\",
         f"  --prefill-tokens {benchmark['prefill_tokens']} \\",
         f"  --decode-tokens {benchmark['decode_tokens']} \\",
         f"  --tokenizer-dir {benchmark['tokenizer_dir']} \\",
@@ -546,17 +652,18 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "## 轮次",
         "",
         (
-            "|round|valid|requests|full overlap (s)|windows|"
-            "throughput avg (tok/s)|Request TPOT avg (ms)|reason|"
+            "|round|valid|requests|peak active|full overlap (s)|windows|"
+            "throughput P50 (tok/s)|Request TPOT avg (ms)|reason|"
         ),
-        "|---:|:---:|---:|---:|---:|---:|---:|---|",
+        "|---:|:---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in summary["results"]:
         lines.append(
             f"|{row['round']}|{row['valid']}|"
             f"{row['successful_requests']}/{benchmark['concurrency']}|"
+            f"{row['active_requests_max']}|"
             f"{format_metric(row['full_overlap_duration_s'])}|{row['window_count']}|"
-            f"{format_metric(row['window_throughput_tok_s']['avg'])}|"
+            f"{format_metric(row['window_throughput_tok_s']['p50'])}|"
             f"{format_metric(row['request_tpot_ms']['avg'])}|{row['invalid_reason']}|"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -565,14 +672,15 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run identical concurrent prefill/decode requests and measure only "
-            "their full-overlap decode interval with sliding windows."
+            "Run distinct concurrent prefill/decode requests and measure their "
+            "peak-active decode intervals with sliding windows."
         )
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:18100")
     parser.add_argument("--model", default="Qwen3.5-397B-A17B-FP8")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--concurrency", type=positive_int, default=16)
+    parser.add_argument("--data-parallel-size", type=positive_int, default=8)
     parser.add_argument("--prefill-tokens", type=positive_int, default=65536)
     parser.add_argument("--decode-tokens", type=positive_int, default=1024)
     parser.add_argument("--tokenizer-dir", type=Path, required=True)
@@ -586,7 +694,7 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.decode_tokens < 2:
         parser.error(
-            "--decode-tokens must be at least 2 for the full-overlap boundary"
+            "--decode-tokens must be at least 2 for decode interval timing"
         )
     return args
 
@@ -601,26 +709,36 @@ def main() -> None:
     raw_path = args.output_dir / "raw_requests.jsonl"
     raw_path.write_text("", encoding="utf-8")
 
-    prompt, source_token_count = build_prompt_token_ids(
+    prompts, source_token_count = load_unique_prompt_token_ids(
         tokenizer_dir=args.tokenizer_dir,
         target_tokens=args.prefill_tokens,
+        concurrency=args.concurrency,
     )
     print(
-        "[prompt] mode=fixed_natural_language "
+        "[prompt] mode=unique_natural_language_prefix "
         f"source_tokens={source_token_count} "
-        f"request_tokens={len(prompt)}",
+        f"request_tokens={len(prompts[0])} "
+        f"unique_requests={len(prompts)}",
         flush=True,
     )
-    payload = {
-        "model": args.model,
-        "prompt": prompt,
-        "max_tokens": args.decode_tokens,
-        "temperature": 0.0,
-        "stream": True,
-        "ignore_eos": True,
-        "return_token_ids": True,
-    }
-    request_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    request_bodies = [
+        json.dumps(
+            {
+                "model": args.model,
+                "prompt": prompt,
+                "max_tokens": args.decode_tokens,
+                "temperature": 0.0,
+                "stream": True,
+                "ignore_eos": True,
+                "return_token_ids": True,
+                "cache_salt": (
+                    f"tpu-daily-c{args.concurrency}-req{request_id}"
+                ),
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        for request_id, prompt in enumerate(prompts)
+    ]
     endpoint = f"{base_url}/v1/completions"
 
     round_summaries: list[dict[str, Any]] = []
@@ -634,8 +752,9 @@ def main() -> None:
         )
         results = run_round(
             endpoint=endpoint,
-            request_body=request_body,
+            request_bodies=request_bodies,
             concurrency=args.concurrency,
+            data_parallel_size=args.data_parallel_size,
             timeout_s=args.request_timeout_seconds,
         )
         write_raw_requests(raw_path, round_index=round_index, results=results)
@@ -652,8 +771,9 @@ def main() -> None:
         all_request_tpots.extend(analysis.request_tpots)
         print(
             f"[round-summary] valid={analysis.summary['valid']} "
+            f"peak_active={analysis.summary['active_requests_max']} "
             f"windows={analysis.summary['window_count']} "
-            f"throughput_avg={analysis.summary['window_throughput_tok_s']['avg']} "
+            f"throughput_p50={analysis.summary['window_throughput_tok_s']['p50']} "
             f"request_tpot_avg_ms={analysis.summary['request_tpot_ms']['avg']}",
             flush=True,
         )
@@ -666,11 +786,11 @@ def main() -> None:
     ]
     best_round = max(
         valid_rounds,
-        key=lambda row: float(row["window_throughput_tok_s"]["avg"]),
+        key=lambda row: float(row["window_throughput_tok_s"]["p50"]),
         default=None,
     )
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
             "base_url": base_url,
@@ -678,16 +798,17 @@ def main() -> None:
             "input_length": args.prefill_tokens,
             "output_length": args.decode_tokens,
             "concurrency": args.concurrency,
+            "data_parallel_size": args.data_parallel_size,
             "prefill_tokens": args.prefill_tokens,
             "decode_tokens": args.decode_tokens,
-            "prompt_mode": "fixed_natural_language_token_ids",
+            "prompt_mode": "unique_natural_language_prefix_token_ids",
             "prompt_source_text": PROMPT_TEXT,
             "prompt_source_tokens": source_token_count,
             "tokenizer_dir": str(args.tokenizer_dir),
-            "identical_prompt_for_all_requests": True,
+            "identical_prompt_for_all_requests": False,
             "window_s": args.window_seconds,
             "step_s": args.step_seconds,
-            "boundary": "slowest_second_token_to_fastest_last_token",
+            "boundary": "peak_active_complete_sliding_windows",
         },
         "best": (
             {
@@ -696,7 +817,7 @@ def main() -> None:
                 "failed": best_round["failed_requests"],
                 "file": "rounds.csv",
                 "mean_tpot_ms": best_round["request_tpot_ms"]["avg"],
-                "output_throughput": best_round["window_throughput_tok_s"]["avg"],
+                "output_throughput": best_round["window_throughput_tok_s"]["p50"],
                 "p99_tpot_ms": best_round["request_tpot_ms"]["p99"],
                 "round": best_round["round"],
             }
@@ -710,8 +831,8 @@ def main() -> None:
             "request_tpot_ms": metric_stats(
                 [float(row["tpot_ms"]) for row in all_request_tpots]
             ),
-            "round_avg_throughput_tok_s": metric_stats(
-                [float(row["window_throughput_tok_s"]["avg"]) for row in valid_rounds]
+            "round_p50_throughput_tok_s": metric_stats(
+                [float(row["window_throughput_tok_s"]["p50"]) for row in valid_rounds]
             ),
             "round_avg_request_tpot_ms": metric_stats(
                 [
@@ -741,7 +862,7 @@ def main() -> None:
     aggregate = summary["aggregate"]
     print(
         "[done] "
-        f"throughput_avg={aggregate['window_throughput_tok_s']['avg']:.3f} tok/s "
+        f"throughput_p50={aggregate['window_throughput_tok_s']['p50']:.3f} tok/s "
         f"request_tpot_avg={aggregate['request_tpot_ms']['avg']:.3f} ms "
         f"output={args.output_dir}",
         flush=True,

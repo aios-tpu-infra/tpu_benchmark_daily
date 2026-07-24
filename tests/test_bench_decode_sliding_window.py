@@ -45,6 +45,31 @@ class PromptConstructionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "produced no tokens"):
             BENCH.repeat_and_truncate_token_ids([], 8)
 
+    def test_builds_deterministic_unique_prompts_at_exact_length(self) -> None:
+        def encode_text(text: str) -> list[int]:
+            if text == BENCH.PROMPT_TEXT:
+                return [101, 102, 103]
+            request_id = int(text.split("request ", 1)[1].split(".", 1)[0])
+            return [9000 + request_id, 9999]
+
+        prompts, source_token_count = BENCH.build_unique_prompt_token_ids(
+            encode_text=encode_text,
+            target_tokens=8,
+            concurrency=3,
+        )
+
+        self.assertEqual(source_token_count, 3)
+        self.assertEqual([len(prompt) for prompt in prompts], [8, 8, 8])
+        self.assertEqual(len({tuple(prompt) for prompt in prompts}), 3)
+        self.assertEqual(
+            prompts,
+            BENCH.build_unique_prompt_token_ids(
+                encode_text=encode_text,
+                target_tokens=8,
+                concurrency=3,
+            )[0],
+        )
+
 
 class StreamTokenAccountingTest(unittest.TestCase):
     def test_reads_complete_sse_lines_from_raw_stream(self) -> None:
@@ -102,6 +127,42 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
         self.assertTrue(
             all(window["throughput_tok_s"] == 2.0 for window in analysis.windows)
         )
+        self.assertEqual(analysis.summary["active_requests_max"], 2)
+        self.assertTrue(
+            analysis.summary["timeline_valid_full_concurrency_decode"]
+        )
+
+    def test_uses_peak_active_windows_when_full_concurrency_has_no_window(self) -> None:
+        results = [
+            BENCH.RequestResult(
+                0, 0.0, 5.0, [0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 5.0], None
+            ),
+            BENCH.RequestResult(
+                1, 1.0, 6.0, [1.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0], None
+            ),
+            BENCH.RequestResult(
+                2, 5.0, 10.0, [5.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0], None
+            ),
+        ]
+
+        analysis = BENCH.analyze_round(
+            round_index=1,
+            results=results,
+            concurrency=3,
+            decode_tokens=7,
+            window_s=2.0,
+            step_s=1.0,
+        )
+
+        self.assertTrue(analysis.summary["valid"])
+        self.assertEqual(analysis.summary["active_requests_max"], 2)
+        self.assertFalse(
+            analysis.summary["timeline_valid_full_concurrency_decode"]
+        )
+        self.assertGreater(analysis.summary["window_count"], 0)
+        self.assertTrue(
+            all(window["active_requests"] == 2 for window in analysis.windows)
+        )
 
     def test_records_request_tpot_when_throughput_window_is_invalid(self) -> None:
         results = [
@@ -114,7 +175,7 @@ class SlidingWindowAnalysisTest(unittest.TestCase):
             results=results,
             concurrency=2,
             decode_tokens=4,
-            window_s=2.0,
+            window_s=3.0,
             step_s=1.0,
         )
 

@@ -8,6 +8,7 @@ STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
+DECODE_MODEL_DIR="${DECODE_MODEL_DIR:-/mnt/data/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
@@ -43,9 +44,9 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
 
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
-.venv, then benchmarks DP8 and PCP8 servers in sequence. DP8 runs the decode
-and prefill suites; PCP8 runs the prefill suite only. Reports are generated
-after each prefill suite and published once after both configurations succeed.
+.venv, then runs a real-weight C256 DP8 decode service followed by the existing
+dummy-weight DP8 and PCP8 prefill services. Reports are generated after each
+prefill suite and published once all three benchmark groups succeed.
 EOF
 }
 
@@ -364,21 +365,29 @@ model_revision=$(python3.12 -c \
 cp "$STATE_DIR/environment.freeze.txt" "$RUN_DIR/environment.freeze.txt"
 
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  "$VENV_DIR/bin/python" - "$MODEL_DIR" <<'PY'
+  "$VENV_DIR/bin/python" - "$MODEL_DIR" "$DECODE_MODEL_DIR" <<'PY'
+from pathlib import Path
 import sys
 from transformers import AutoConfig, AutoTokenizer
 
-model_dir = sys.argv[1]
-config = AutoConfig.from_pretrained(
-    model_dir, local_files_only=True, trust_remote_code=False
-)
-tokenizer = AutoTokenizer.from_pretrained(
-    model_dir, local_files_only=True, trust_remote_code=False
-)
-print(
-    "Offline model metadata OK: "
-    f"config={type(config).__name__}, tokenizer={type(tokenizer).__name__}"
-)
+for role, model_dir in (
+    ("prefill metadata", sys.argv[1]),
+    ("decode weights", sys.argv[2]),
+):
+    config = AutoConfig.from_pretrained(
+        model_dir, local_files_only=True, trust_remote_code=False
+    )
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_dir, local_files_only=True, trust_remote_code=False
+    )
+    if role == "decode weights" and not next(
+        Path(model_dir).glob("*.safetensors"), None
+    ):
+        raise SystemExit(f"ERROR: decode model has no safetensors: {model_dir}")
+    print(
+        f"Offline {role} OK: "
+        f"config={type(config).__name__}, tokenizer={type(tokenizer).__name__}"
+    )
 PY
 
 cat > "$RUN_DIR/run_metadata.json" <<EOF
@@ -391,7 +400,10 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "model_directory": "$MODEL_DIR",
   "model_revision": "$model_revision",
   "model_load_format": "dummy",
-  "benchmark_configs": ["dp8", "pcp8"],
+  "decode_model_directory": "$DECODE_MODEL_DIR",
+  "decode_model_load_format": "auto",
+  "decode_workload": "C256/P65536/D1024",
+  "benchmark_configs": ["dp8_decode_c256", "dp8", "pcp8"],
   "port": $PORT
 }
 EOF
@@ -447,6 +459,7 @@ stop_server() {
 start_server() {
   local benchmark_config=$1
   local server_script=$2
+  local server_model_dir=$3
   local server_log="$RUN_DIR/${benchmark_config}_server.log"
   local ready=0
 
@@ -455,8 +468,13 @@ start_server() {
     return 1
   fi
 
-  echo "Starting $benchmark_config dummy-weight inference server..."
-  setsid "$server_script" > "$server_log" 2>&1 &
+  echo "Starting $benchmark_config inference server..."
+  setsid env \
+    PORT="$PORT" \
+    VENV_DIR="$VENV_DIR" \
+    TORCHTPU_DIR="$TORCHTPU_DIR" \
+    MODEL_DIR="$server_model_dir" \
+    "$server_script" > "$server_log" 2>&1 &
   SERVER_PID=$!
   SERVER_CONFIG=$benchmark_config
   echo "$SERVER_PID" > "$RUN_DIR/${benchmark_config}_server.pid"
@@ -485,29 +503,30 @@ start_server() {
   echo "$benchmark_config server is healthy on port $PORT."
 }
 
-run_benchmark_suite() {
-  local benchmark_config=$1
-  local run_decode=$2
-  local result_dir="$RUN_DIR/results/$benchmark_config"
-
+run_decode_benchmark() {
+  local result_dir="$RUN_DIR/results/dp8"
   mkdir -p "$result_dir"
-  if (( run_decode )); then
-    echo "Running $benchmark_config decode benchmark..."
-    "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
-      --base-url "http://127.0.0.1:$PORT" \
-      --model Qwen3.5-397B-A17B-FP8 \
-      --output-dir "$result_dir/decode_sliding_window" \
-      --concurrency 16 \
-      --prefill-tokens 65536 \
-      --decode-tokens 4096 \
-      --tokenizer-dir "$MODEL_DIR" \
-      --rounds 3 \
-      --window-seconds 5 \
-      --step-seconds 1 \
-      2>&1 | tee "$RUN_DIR/${benchmark_config}_decode_benchmark.log"
-  else
-    echo "Skipping $benchmark_config decode benchmark; decode is measured only for DP8."
-  fi
+  echo "Running real-weight DP8 C256 decode benchmark..."
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
+    --base-url "http://127.0.0.1:$PORT" \
+    --model Qwen3.5-397B-A17B-FP8 \
+    --output-dir "$result_dir/decode_sliding_window" \
+    --concurrency 256 \
+    --data-parallel-size 8 \
+    --prefill-tokens 65536 \
+    --decode-tokens 1024 \
+    --tokenizer-dir "$DECODE_MODEL_DIR" \
+    --rounds 3 \
+    --window-seconds 10 \
+    --step-seconds 1 \
+    2>&1 | tee "$RUN_DIR/dp8_decode_c256_benchmark.log"
+
+  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
+  echo "DP8 C256 decode benchmark completed successfully."
+}
+
+run_prefill_benchmark() {
+  local benchmark_config=$1
 
   echo "Running $benchmark_config prefill benchmark..."
   BENCHMARK_CONFIG="$benchmark_config" PUBLISH_REPORTS=0 \
@@ -515,7 +534,7 @@ run_benchmark_suite() {
     2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_benchmark.log"
 
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
-  echo "$benchmark_config benchmark suite completed successfully."
+  echo "$benchmark_config prefill benchmark completed successfully."
 }
 
 on_signal() {
@@ -526,12 +545,16 @@ on_signal() {
 trap stop_server EXIT
 trap on_signal INT TERM
 
-start_server dp8 "$SCRIPT_DIR/start_dp_server.sh"
-run_benchmark_suite dp8 1
+start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$DECODE_MODEL_DIR"
+run_decode_benchmark
 stop_server
 
-start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh"
-run_benchmark_suite pcp8 0
+start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"
+run_prefill_benchmark dp8
+stop_server
+
+start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"
+run_prefill_benchmark pcp8
 
 if (( PUBLISH_REPORTS )); then
   "$SCRIPT_DIR/publish_report.sh"

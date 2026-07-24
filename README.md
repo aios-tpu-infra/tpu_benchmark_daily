@@ -1,8 +1,15 @@
 # TPU daily benchmark
 
-This project runs a reproducible Qwen3.5-397B-A17B-FP8 throughput benchmark on
-TorchTPU/vLLM. Model weights are replaced with vLLM dummy weights; the checked-in
-`models/` directory contains only an offline configuration/tokenizer snapshot.
+## TL;DR
+
+本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 benchmark：真实权重
+TP1/DP8/EP8 C256 decode、dummy-weight DP8 prefill 和 dummy-weight PCP8
+prefill。Decode 使用 C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，
+按实际 peak-active plateau 统计；prefill 保持原有口径，避免破坏历史趋势。
+
+项目内 `models/` 只保存 prefill dummy 服务使用的离线 config/tokenizer。
+Decode 默认从 `/mnt/data/models/Qwen3.5-397B-A17B-FP8` 加载完整权重，可通过
+`DECODE_MODEL_DIR` 覆盖。
 
 ## Recent benchmark throughput
 
@@ -39,6 +46,9 @@ The charts compare the latest successful DP8 and PCP8 throughput across concurre
 - `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
   refreshed from `origin/main` (the local path is retained for compatibility).
 - `models/`: offline model metadata; no checkpoint weights.
+- `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
+  C256 decode service with unified pool, 4352-token pages, GMU 0.96, async
+  scheduling, GDN v3, and prefix cache disabled.
 - `scripts/start_dp_server.sh`: starts the DP8/PCP1 vLLM server with dummy weights.
 - `scripts/start_pcp_server.sh`: starts the DP1/PCP8 vLLM server with dummy weights.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64 for
@@ -61,6 +71,10 @@ that user before the first run:
 gcloud auth login
 gcloud auth list --filter=status:ACTIVE
 ```
+
+完整 daily run 还要求 `DECODE_MODEL_DIR` 中存在 `config.json`、
+`tokenizer.json` 和真实 `*.safetensors` 权重。`--prepare-only` 同样检查
+这套 decode 权重，以便在占用 TPU 前尽早失败。
 
 The installer deliberately uses `gcloud auth print-access-token` instead of
 Application Default Credentials because these can represent different users or
@@ -92,12 +106,22 @@ server listening on `PORT` (18100 by default), including its worker process
 group. A non-vLLM process on that port is never killed and causes the job to
 fail safely. `--prepare-only` leaves any running service untouched.
 
-The runner first starts DP8 and executes the decode and prefill suites, stops
-that server, then starts PCP8 and executes the prefill suite only. The complete
-run therefore contains three benchmark groups: DP8 decode, DP8 prefill, and
-PCP8 prefill. Servers are stopped after the benchmark by default. Use
-`--keep-server-running` only for interactive debugging; when successful, it
-keeps the final PCP8 server alive.
+The runner first starts the real-weight DP8 C256 decode service, runs
+C256/P65536/D1024 for three rounds, and stops it. It then starts the existing
+dummy-weight DP8 and PCP8 services one at a time for their prefill suites. The
+complete run therefore contains three benchmark groups: DP8 C256 decode, DP8
+prefill, and PCP8 prefill. Servers are stopped after the benchmark by default.
+Use `--keep-server-running` only for interactive debugging; when successful,
+it keeps the final PCP8 server alive.
+
+Decode 每条请求使用不同但可重复生成的自然语言前缀，服务关闭 prefix cache，
+不会因同 prompt 复用 KV cache；client 通过 `X-data-parallel-rank` 将
+256 条请求精确均分为每个 DP rank 32 条。若 256 条请求没有形成完整 10 秒
+重叠区间，
+`summary.json` 中的 `active_requests_max` 和
+`timeline_valid_full_concurrency_decode` 会记录实际峰值并发，主吞吐取该峰值
+并发平台窗口的 P50。原始请求、窗口和逐请求 TPOT 分别位于
+`raw_requests.jsonl`、`timeline.csv` 和 `request_tpot.csv`。
 
 The three benchmark groups share one run ID and one workflow start timestamp.
 The homepage combines them into one table row and uses that shared start time

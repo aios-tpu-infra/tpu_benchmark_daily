@@ -73,8 +73,9 @@ gcloud auth list --filter=status:ACTIVE
 ```
 
 完整 daily run 还要求 `DECODE_MODEL_DIR` 中存在 `config.json`、
-`tokenizer.json` 和真实 `*.safetensors` 权重。`--prepare-only` 同样检查
-这套 decode 权重，以便在占用 TPU 前尽早失败。
+`tokenizer.json` 和真实 `*.safetensors` 权重。默认全量
+`--prepare-only` 同样检查这套 decode 权重，以便在占用 TPU 前尽早失败；
+配合 `--only` 时只检查所选 benchmark 需要的模型。
 
 The installer deliberately uses `gcloud auth print-access-token` instead of
 Application Default Credentials because these can represent different users or
@@ -100,6 +101,26 @@ The remaining dependencies are then synchronized with `uv`.
 ```bash
 scripts/daily_benchmark.sh
 ```
+
+To run only one benchmark group, use `--only`:
+
+```bash
+scripts/daily_benchmark.sh --only dp-decode
+scripts/daily_benchmark.sh --only dp-prefill
+scripts/daily_benchmark.sh --only pcp-prefill
+```
+
+Omitting `--only` preserves the full three-group workflow. A selective run
+updates the environment in the same way as a full run, but validates and starts
+only the model/service required by the selected benchmark. This means
+`--only pcp-prefill` does not require the real decode weights in
+`DECODE_MODEL_DIR`.
+
+DP or PCP prefill-only runs regenerate and publish their throughput report
+unless `PUBLISH_REPORTS=0`. A decode-only run records its artifacts beneath the
+new run directory but skips Git report publication because the current homepage
+report is anchored to a prefill result. With `--keep-server-running`, the server
+for the selected benchmark is kept after a successful selective run.
 
 Before updating or building, the full workflow stops an existing vLLM API
 server listening on `PORT` (18100 by default), including its worker process

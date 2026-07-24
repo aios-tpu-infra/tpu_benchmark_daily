@@ -16,6 +16,11 @@ KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
 PREPARE_ONLY=0
+BENCHMARK_SELECTION=all
+RUN_DP_DECODE=0
+RUN_DP_PREFILL=0
+RUN_PCP_PREFILL=0
+BENCHMARK_CONFIGS_JSON=
 
 mkdir -p "$STATE_DIR" "$PROJECT_ROOT/runs"
 if [[ "${DAILY_BENCHMARK_LOCKED:-0}" != 1 ]]; then
@@ -38,15 +43,19 @@ fi
 usage() {
   cat <<'EOF'
 Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
+                                  [--only BENCHMARK]
 
   --prepare-only         Prepare source/environment without touching a server.
   --keep-server-running  Keep a successfully benchmarked server alive.
+  --only BENCHMARK       Run only one benchmark group. BENCHMARK must be one of:
+                         dp-decode, dp-prefill, or pcp-prefill.
 
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
 .venv, then runs a real-weight C256 DP8 decode service followed by the existing
 dummy-weight DP8 and PCP8 prefill services. Reports are generated after each
-prefill suite and published once all three benchmark groups succeed.
+prefill suite and published once all selected benchmark groups succeed. Omit
+--only to run all three benchmark groups.
 EOF
 }
 
@@ -57,6 +66,18 @@ while (( $# > 0 )); do
       ;;
     --keep-server-running)
       KEEP_SERVER_RUNNING=1
+      ;;
+    --only)
+      if (( $# < 2 )); then
+        echo "ERROR: --only requires a benchmark name." >&2
+        usage >&2
+        exit 2
+      fi
+      BENCHMARK_SELECTION=$2
+      shift
+      ;;
+    --only=*)
+      BENCHMARK_SELECTION=${1#*=}
       ;;
     -h|--help)
       usage
@@ -70,6 +91,33 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+case "$BENCHMARK_SELECTION" in
+  all)
+    RUN_DP_DECODE=1
+    RUN_DP_PREFILL=1
+    RUN_PCP_PREFILL=1
+    BENCHMARK_CONFIGS_JSON='["dp8_decode_c256", "dp8", "pcp8"]'
+    ;;
+  dp-decode)
+    RUN_DP_DECODE=1
+    BENCHMARK_CONFIGS_JSON='["dp8_decode_c256"]'
+    ;;
+  dp-prefill)
+    RUN_DP_PREFILL=1
+    BENCHMARK_CONFIGS_JSON='["dp8"]'
+    ;;
+  pcp-prefill)
+    RUN_PCP_PREFILL=1
+    BENCHMARK_CONFIGS_JSON='["pcp8"]'
+    ;;
+  *)
+    echo "ERROR: invalid --only benchmark '$BENCHMARK_SELECTION'." >&2
+    echo "Expected dp-decode, dp-prefill, or pcp-prefill." >&2
+    exit 2
+    ;;
+esac
+RUN_PREFILL=$(( RUN_DP_PREFILL || RUN_PCP_PREFILL ))
 
 for value_name in PORT SERVER_READY_TIMEOUT SERVER_STOP_TIMEOUT; do
   value=${!value_name}
@@ -347,6 +395,7 @@ echo "Daily TPU benchmark started at $benchmark_started_at"
 echo "Project root: $PROJECT_ROOT"
 echo "Run directory: $RUN_DIR"
 echo "Machine IP: $MACHINE_IP"
+echo "Benchmark selection: $BENCHMARK_SELECTION"
 
 if (( ! PREPARE_ONLY )); then
   stop_existing_server
@@ -359,21 +408,31 @@ torch_tpu_version=$(
   "$VENV_DIR/bin/python" -c \
     'from importlib.metadata import version; print(version("torch-tpu"))'
 )
-model_revision=$(python3.12 -c \
-  'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["revision"])' \
-  "$MODEL_DIR/SOURCE.json")
+model_revision=""
+if (( RUN_PREFILL )); then
+  model_revision=$(python3.12 -c \
+    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["revision"])' \
+    "$MODEL_DIR/SOURCE.json")
+fi
 cp "$STATE_DIR/environment.freeze.txt" "$RUN_DIR/environment.freeze.txt"
 
 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 \
-  "$VENV_DIR/bin/python" - "$MODEL_DIR" "$DECODE_MODEL_DIR" <<'PY'
+  "$VENV_DIR/bin/python" - \
+    "$MODEL_DIR" \
+    "$DECODE_MODEL_DIR" \
+    "$RUN_PREFILL" \
+    "$RUN_DP_DECODE" <<'PY'
 from pathlib import Path
 import sys
 from transformers import AutoConfig, AutoTokenizer
 
-for role, model_dir in (
-    ("prefill metadata", sys.argv[1]),
-    ("decode weights", sys.argv[2]),
-):
+models = []
+if sys.argv[3] == "1":
+    models.append(("prefill metadata", sys.argv[1]))
+if sys.argv[4] == "1":
+    models.append(("decode weights", sys.argv[2]))
+
+for role, model_dir in models:
     config = AutoConfig.from_pretrained(
         model_dir, local_files_only=True, trust_remote_code=False
     )
@@ -394,6 +453,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
 {
   "started_at": "$benchmark_started_at",
   "machine_ip": "$MACHINE_IP",
+  "benchmark_selection": "$BENCHMARK_SELECTION",
   "torchtpu_vllm_revision": "$source_revision",
   "torch_tpu_version": "$torch_tpu_version",
   "torch_tpu_install_source": "pip",
@@ -403,7 +463,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "decode_model_directory": "$DECODE_MODEL_DIR",
   "decode_model_load_format": "auto",
   "decode_workload": "C256/P65536/D1024",
-  "benchmark_configs": ["dp8_decode_c256", "dp8", "pcp8"],
+  "benchmark_configs": $BENCHMARK_CONFIGS_JSON,
   "port": $PORT
 }
 EOF
@@ -421,6 +481,7 @@ fi
 SERVER_PID=""
 SERVER_CONFIG=""
 RUN_SUCCEEDED=0
+REPORT_GENERATED=0
 
 stop_server() {
   local target_config
@@ -534,6 +595,7 @@ run_prefill_benchmark() {
     2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_benchmark.log"
 
   curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
+  REPORT_GENERATED=1
   echo "$benchmark_config prefill benchmark completed successfully."
 }
 
@@ -545,19 +607,32 @@ on_signal() {
 trap stop_server EXIT
 trap on_signal INT TERM
 
-start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$DECODE_MODEL_DIR"
-run_decode_benchmark
-stop_server
+if (( RUN_DP_DECODE )); then
+  start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$DECODE_MODEL_DIR"
+  run_decode_benchmark
+  if (( RUN_DP_PREFILL || RUN_PCP_PREFILL )); then
+    stop_server
+  fi
+fi
 
-start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"
-run_prefill_benchmark dp8
-stop_server
+if (( RUN_DP_PREFILL )); then
+  start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"
+  run_prefill_benchmark dp8
+  if (( RUN_PCP_PREFILL )); then
+    stop_server
+  fi
+fi
 
-start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"
-run_prefill_benchmark pcp8
+if (( RUN_PCP_PREFILL )); then
+  start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"
+  run_prefill_benchmark pcp8
+fi
 
-if (( PUBLISH_REPORTS )); then
+if (( PUBLISH_REPORTS && REPORT_GENERATED )); then
   "$SCRIPT_DIR/publish_report.sh"
+elif (( PUBLISH_REPORTS )); then
+  echo "Skipping Git report publication because the selected decode-only run"
+  echo "does not generate a prefill throughput report."
 else
   echo "Skipping Git report publication because PUBLISH_REPORTS=0."
 fi

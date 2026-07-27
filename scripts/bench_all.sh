@@ -56,7 +56,7 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-read -r -a concurrencies <<< "${CONCURRENCIES:-1 2 4 8 16 32 64 128 256}"
+read -r -a concurrencies <<< "${CONCURRENCIES:-8 16 32 64 128 256}"
 if (( ${#concurrencies[@]} == 0 )); then
   echo "ERROR: CONCURRENCIES must contain at least one value." >&2
   exit 2

@@ -56,7 +56,7 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
   the current standalone C256 test.
 - `scripts/start_dp_server.sh`: starts the DP8/PCP1 vLLM server with dummy weights.
 - `scripts/start_pcp_server.sh`: starts the DP1/PCP8 vLLM server with dummy weights.
-- `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 1–64 for
+- `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then

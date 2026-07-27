@@ -91,8 +91,15 @@ if not isinstance(benchmarks, dict) or not benchmarks:
     raise SystemExit("latest.json does not contain benchmark results")
 newest = max(benchmarks.values(), key=lambda item: item["completed_at"])
 run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(newest["run_id"]))
+
+
+def throughput_text(result):
+    value = result.get("total_token_throughput")
+    return "N/A" if value is None else f"{float(value):.2f}"
+
+
 summary = ", ".join(
-    f'{config.upper()} {float(result["total_token_throughput"]):.2f}'
+    f"{config.upper()} {throughput_text(result)}"
     for config, result in sorted(benchmarks.items())
 )
 print(run_id)

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Record a successful benchmark and regenerate the local throughput report."""
+"""Record a benchmark attempt and regenerate the local throughput report."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
@@ -33,6 +33,8 @@ BENCHMARK_CONFIGS = {
 CSV_FIELDS = (
     "run_id",
     "benchmark_config",
+    "status",
+    "decode_status",
     "started_at",
     "completed_at",
     "machine_ip",
@@ -58,12 +60,26 @@ CSV_FIELDS = (
 def parse_args() -> argparse.Namespace:
     script_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
-        description="Append one successful benchmark and regenerate reports."
+        description="Append one benchmark attempt and regenerate reports."
     )
     parser.add_argument("--project-root", type=Path, default=script_root)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument("--summary", type=Path, required=True)
+    parser.add_argument("--summary", type=Path)
     parser.add_argument("--decode-summary", type=Path)
+    parser.add_argument(
+        "--status",
+        choices=("success", "failed", "not-run"),
+        default="success",
+        help="Prefill benchmark status; failed throughput is recorded as -1.",
+    )
+    parser.add_argument(
+        "--decode-status",
+        choices=("success", "failed", "not-run"),
+        help=(
+            "Decode benchmark status; defaults to success when --decode-summary "
+            "is supplied and not-run otherwise."
+        ),
+    )
     parser.add_argument("--benchmark-config")
     parser.add_argument("--input-length", type=int)
     parser.add_argument("--output-length", type=int)
@@ -249,31 +265,58 @@ def build_record(
     *,
     project_root: Path,
     run_dir: Path,
-    summary_path: Path,
+    summary_path: Path | None,
     input_length: int | None,
     output_length: int | None,
     model: str | None,
     benchmark_config: str | None,
     decode_summary_path: Path | None = None,
+    status: str = "success",
+    decode_status: str = "not-run",
 ) -> dict[str, Any]:
-    summary = load_json(summary_path)
-    best = summary.get("best")
-    results = summary.get("results")
-    if not isinstance(best, dict) or not isinstance(results, list) or not results:
-        raise ValueError(f"invalid benchmark summary: {summary_path}")
+    if status not in {"success", "failed", "not-run"}:
+        raise ValueError(f"invalid benchmark status: {status!r}")
+    if decode_status not in {"success", "failed", "not-run"}:
+        raise ValueError(f"invalid decode status: {decode_status!r}")
+    if status == "success" and summary_path is None:
+        raise ValueError("a successful benchmark requires --summary")
 
-    failed = sum(int(item.get("failed", 0)) for item in results)
-    if failed:
-        raise ValueError(f"refusing to record a benchmark with {failed} failed requests")
-
-    best_filename = best.get("file")
+    summary: dict[str, Any] = {}
+    best: dict[str, Any] = {}
+    results: list[dict[str, Any]] = []
     detail: dict[str, Any] = {}
-    if isinstance(best_filename, str):
-        detail_path = summary_path.parent / best_filename
-        if detail_path.is_file():
-            detail = load_json(detail_path)
+    benchmark: dict[str, Any] = {}
+    if status == "success":
+        assert summary_path is not None
+        summary = load_json(summary_path)
+        loaded_best = summary.get("best")
+        loaded_results = summary.get("results")
+        if (
+            not isinstance(loaded_best, dict)
+            or not isinstance(loaded_results, list)
+            or not loaded_results
+            or not all(isinstance(item, dict) for item in loaded_results)
+        ):
+            raise ValueError(f"invalid benchmark summary: {summary_path}")
+        best = loaded_best
+        results = loaded_results
 
-    benchmark = summary.get("benchmark")
+        failed = sum(int(item.get("failed", 0)) for item in results)
+        if failed:
+            raise ValueError(
+                f"refusing to record a benchmark with {failed} failed requests"
+            )
+
+        best_filename = best.get("file")
+        if isinstance(best_filename, str):
+            detail_path = summary_path.parent / best_filename
+            if detail_path.is_file():
+                detail = load_json(detail_path)
+
+        loaded_benchmark = summary.get("benchmark")
+        if isinstance(loaded_benchmark, dict):
+            benchmark = loaded_benchmark
+
     if not isinstance(benchmark, dict):
         benchmark = {}
     benchmark_config = normalize_benchmark_config(
@@ -283,13 +326,25 @@ def build_record(
             {"run_id": run_dir.name, "summary_path": str(summary_path)}
         )
     )
-    decode_summary = (
-        load_json(decode_summary_path) if decode_summary_path is not None else None
-    )
-    (
-        decode_window_p50_throughput,
-        decode_peak_active_tpot_p50_ms,
-    ) = decode_metrics(summary, benchmark_config, decode_summary)
+    if benchmark_config != "dp8" and decode_status != "not-run":
+        raise ValueError("decode status can only be recorded on the dp8 record")
+
+    if decode_status == "success":
+        if decode_summary_path is None:
+            raise ValueError("successful decode requires --decode-summary")
+        decode_summary = load_json(decode_summary_path)
+        (
+            decode_window_p50_throughput,
+            decode_peak_active_tpot_p50_ms,
+        ) = decode_metrics(summary, benchmark_config, decode_summary)
+        if decode_window_p50_throughput is None:
+            raise ValueError("decode summary does not contain throughput")
+    elif decode_status == "failed":
+        decode_window_p50_throughput = -1.0
+        decode_peak_active_tpot_p50_ms = None
+    else:
+        decode_window_p50_throughput = None
+        decode_peak_active_tpot_p50_ms = None
 
     input_length = (
         input_length
@@ -324,47 +379,86 @@ def build_record(
     run_id = run_dir.name
     started_at = metadata.get("started_at") or run_id_timestamp(run_id)
     if not isinstance(started_at, str):
-        started_at = iso_utc(
+        if summary_path is not None and summary_path.exists():
+            started_at = iso_utc(
+                datetime.fromtimestamp(summary_path.stat().st_mtime, tz=UTC)
+            )
+        else:
+            started_at = iso_utc(datetime.now(tz=UTC))
+    if summary_path is not None and summary_path.exists():
+        fallback_completed_at = iso_utc(
             datetime.fromtimestamp(summary_path.stat().st_mtime, tz=UTC)
         )
-    completed_at = benchmark_timestamp(detail.get("date")) or iso_utc(
-        datetime.fromtimestamp(summary_path.stat().st_mtime, tz=UTC)
-    )
+    else:
+        fallback_completed_at = iso_utc(datetime.now(tz=UTC))
+    completed_at = benchmark_timestamp(detail.get("date")) or fallback_completed_at
 
     concurrency_results = []
-    for item in sorted(results, key=lambda row: int(row["concurrency"])):
-        concurrency_results.append(
-            {
-                "concurrency": positive_int(item["concurrency"], "concurrency"),
-                "total_token_throughput": finite_float(
-                    item["total_token_throughput"], "total_token_throughput"
-                ),
-                "request_throughput": finite_float(
-                    item["request_throughput"], "request_throughput"
-                ),
-                "mean_ttft_ms": finite_float(item["mean_ttft_ms"], "mean_ttft_ms"),
-                "p99_ttft_ms": finite_float(item["p99_ttft_ms"], "p99_ttft_ms"),
-            }
+    if status == "success":
+        for item in sorted(results, key=lambda row: int(row["concurrency"])):
+            concurrency_results.append(
+                {
+                    "concurrency": positive_int(item["concurrency"], "concurrency"),
+                    "total_token_throughput": finite_float(
+                        item["total_token_throughput"], "total_token_throughput"
+                    ),
+                    "request_throughput": finite_float(
+                        item["request_throughput"], "request_throughput"
+                    ),
+                    "mean_ttft_ms": finite_float(
+                        item["mean_ttft_ms"], "mean_ttft_ms"
+                    ),
+                    "p99_ttft_ms": finite_float(
+                        item["p99_ttft_ms"], "p99_ttft_ms"
+                    ),
+                }
+            )
+
+    if status == "success":
+        best_total_token_throughput: float | None = finite_float(
+            best["total_token_throughput"], "best_total_token_throughput"
         )
+        best_request_throughput: float | None = finite_float(
+            best["request_throughput"], "best_request_throughput"
+        )
+        best_concurrency: int | None = positive_int(
+            best["concurrency"], "best_concurrency"
+        )
+        mean_ttft_ms: float | None = finite_float(
+            best["mean_ttft_ms"], "mean_ttft_ms"
+        )
+        p99_ttft_ms: float | None = finite_float(
+            best["p99_ttft_ms"], "p99_ttft_ms"
+        )
+    elif status == "failed":
+        best_total_token_throughput = -1.0
+        best_request_throughput = -1.0
+        best_concurrency = None
+        mean_ttft_ms = None
+        p99_ttft_ms = None
+    else:
+        best_total_token_throughput = None
+        best_request_throughput = None
+        best_concurrency = None
+        mean_ttft_ms = None
+        p99_ttft_ms = None
 
     return {
         "run_id": run_id,
         "benchmark_config": benchmark_config,
+        "status": status,
+        "decode_status": decode_status,
         "started_at": started_at,
         "completed_at": completed_at,
         "machine_ip": machine_ip,
         "model": str(model),
         "input_length": input_length,
         "output_length": output_length,
-        "best_total_token_throughput": finite_float(
-            best["total_token_throughput"], "best_total_token_throughput"
-        ),
-        "best_request_throughput": finite_float(
-            best["request_throughput"], "best_request_throughput"
-        ),
-        "best_concurrency": positive_int(best["concurrency"], "best_concurrency"),
-        "mean_ttft_ms": finite_float(best["mean_ttft_ms"], "mean_ttft_ms"),
-        "p99_ttft_ms": finite_float(best["p99_ttft_ms"], "p99_ttft_ms"),
+        "best_total_token_throughput": best_total_token_throughput,
+        "best_request_throughput": best_request_throughput,
+        "best_concurrency": best_concurrency,
+        "mean_ttft_ms": mean_ttft_ms,
+        "p99_ttft_ms": p99_ttft_ms,
         LEGACY_DECODE_THROUGHPUT_FIELD: None,
         LEGACY_DECODE_TPOT_FIELD: None,
         "decode_window_p50_throughput": decode_window_p50_throughput,
@@ -377,7 +471,11 @@ def build_record(
         # history/CSV compatibility and use the package version for display.
         "torch_tpu_revision": str(metadata.get("torch_tpu_revision", "")),
         "torch_tpu_version": str(metadata.get("torch_tpu_version", "unknown")),
-        "summary_path": relative_path(summary_path, project_root),
+        "summary_path": (
+            relative_path(summary_path, project_root)
+            if summary_path is not None
+            else ""
+        ),
         "concurrency_results": concurrency_results,
     }
 
@@ -387,7 +485,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -399,6 +497,14 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         run["benchmark_config"] = normalize_benchmark_config(
             run.get("benchmark_config") or infer_legacy_benchmark_config(run)
         )
+        status = str(run.get("status") or "").strip().lower()
+        if status not in {"success", "failed", "not-run"}:
+            status = (
+                "failed"
+                if run.get("best_total_token_throughput") == -1
+                else "success"
+            )
+        run["status"] = status
         legacy_decode_throughput = run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
         if legacy_decode_throughput is None:
             legacy_decode_throughput = run.get("decode_peak_output_throughput")
@@ -423,6 +529,20 @@ def load_history(path: Path) -> list[dict[str, Any]]:
             run.get("decode_peak_active_tpot_p50_ms"),
             "decode_peak_active_tpot_p50_ms",
         )
+        decode_status = str(run.get("decode_status") or "").strip().lower()
+        if decode_status not in {"success", "failed", "not-run"}:
+            decode_throughput = run.get("decode_window_p50_throughput")
+            legacy_decode_throughput = run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
+            if decode_throughput == -1:
+                decode_status = "failed"
+            elif (
+                decode_throughput is not None
+                or legacy_decode_throughput is not None
+            ):
+                decode_status = "success"
+            else:
+                decode_status = "not-run"
+        run["decode_status"] = decode_status
     return runs
 
 
@@ -449,9 +569,16 @@ def update_history(
             **{
                 field: existing.get(field)
                 for field in decode_fields
-                if record.get(field) is None and existing.get(field) is not None
+                if record.get("decode_status") != "failed"
+                and record.get(field) is None
+                and existing.get(field) is not None
             },
         }
+        if (
+            record.get("decode_status") == "not-run"
+            and existing.get("decode_status") in {"success", "failed"}
+        ):
+            record["decode_status"] = existing["decode_status"]
     by_key[key] = record
     return sorted(
         by_key.values(),
@@ -621,7 +748,13 @@ def chart_svg(
     return "".join(parts)
 
 
-def empty_chart_svg(*, title: str, description: str, id_prefix: str) -> str:
+def empty_chart_svg(
+    *,
+    title: str,
+    description: str,
+    id_prefix: str,
+    message: str = "No successful benchmark data yet.",
+) -> str:
     return "".join(
         [
             '<?xml version="1.0" encoding="UTF-8"?>\n',
@@ -634,7 +767,7 @@ def empty_chart_svg(*, title: str, description: str, id_prefix: str) -> str:
             'font-size="19" font-weight="600" x="82" y="45">',
             f"{html.escape(title)}</text>",
             '<text fill="#52606d" font-family="system-ui,sans-serif" ',
-            'font-size="15" x="82" y="100">No decode benchmark data yet.</text>',
+            f'font-size="15" x="82" y="100">{html.escape(message)}</text>',
             "</svg>",
         ]
     )
@@ -678,7 +811,13 @@ def history_chart_data(
     x_labels = [display_time(run_times[run_id])[5:] for run_id in run_ids]
     series = []
     for config, style in BENCHMARK_CONFIGS.items():
-        config_runs = [run for run in runs if run["benchmark_config"] == config]
+        config_runs = [
+            run
+            for run in runs
+            if run["benchmark_config"] == config
+            and run.get("status", "success") == "success"
+            and run.get("best_total_token_throughput") is not None
+        ]
         if not config_runs:
             continue
         series.append(
@@ -710,6 +849,7 @@ def decode_history_chart_data(
         run
         for run in runs
         if run["benchmark_config"] == "dp8"
+        and run.get("decode_status", "success") == "success"
         and (
             run.get(LEGACY_DECODE_THROUGHPUT_FIELD) is not None
             or run.get("decode_window_p50_throughput") is not None
@@ -774,7 +914,7 @@ def concurrency_chart_data(
     series = []
     for config, style in BENCHMARK_CONFIGS.items():
         run = latest.get(config)
-        if run is None:
+        if run is None or not run.get("concurrency_results"):
             continue
         series.append(
             {
@@ -810,6 +950,8 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "run_id": run["run_id"],
         "benchmark_config": run["benchmark_config"],
+        "status": run.get("status", "success"),
+        "decode_status": run.get("decode_status", "not-run"),
         "completed_at": run["completed_at"],
         "machine_ip": run["machine_ip"],
         "model": run["model"],
@@ -901,12 +1043,23 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         run = latest.get(config)
         if run is None:
             continue
-        latest_lines.append(
-            f"Latest successful {style['label']}: "
-            f"**{run['best_total_token_throughput']:,.2f} total tok/s** "
-            f"at concurrency **{run['best_concurrency']}** "
-            f"(`{run['run_id']}`)."
-        )
+        if run.get("status") == "failed":
+            latest_lines.append(
+                f"Latest {style['label']}: **failed "
+                f"({run['best_total_token_throughput']:,.2f} total tok/s)** "
+                f"(`{run['run_id']}`)."
+            )
+        elif run.get("status") == "not-run":
+            latest_lines.append(
+                f"Latest {style['label']}: **not run** (`{run['run_id']}`)."
+            )
+        else:
+            latest_lines.append(
+                f"Latest {style['label']}: "
+                f"**{run['best_total_token_throughput']:,.2f} total tok/s** "
+                f"at concurrency **{run['best_concurrency']}** "
+                f"(`{run['run_id']}`)."
+            )
     rows = []
     for grouped_run in report_table_runs(runs, table_limit):
         dp_run = grouped_run["configs"].get("dp8")
@@ -929,7 +1082,12 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         legacy_dp_tpot = (
             dp_run.get(LEGACY_DECODE_TPOT_FIELD) if dp_run else None
         )
-        if dp_decode is not None:
+        decode_status = dp_run.get("decode_status") if dp_run else "not-run"
+        if decode_status == "failed":
+            dp_decode = -1.0
+            dp_tpot_p50 = None
+            decode_protocol = "failed"
+        elif dp_decode is not None:
             decode_protocol = "C256 peak-active P50"
         elif legacy_dp_decode is not None:
             dp_decode = legacy_dp_decode
@@ -973,8 +1131,10 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "|---|---|---:|---:|---:|---:|---|",
             *rows,
             "",
-            "The prefill charts compare the latest successful DP8 and PCP8 "
-            "throughput and track their recent peaks. The decode chart keeps "
+            "Failed benchmark groups are recorded as -1 tok/s in the table and "
+            "JSON/CSV reports, while charts plot successful measurements only. "
+            "The prefill charts compare DP8 and PCP8 throughput and track their "
+            "recent peaks. The decode chart keeps "
             "legacy peak-output and current peak-active P50 statistics in "
             "separate series; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
@@ -1001,7 +1161,10 @@ def main() -> None:
 
     project_root = args.project_root.resolve()
     run_dir = args.run_dir.resolve()
-    summary_path = args.summary.resolve()
+    summary_path = args.summary.resolve() if args.summary is not None else None
+    decode_status = args.decode_status
+    if decode_status is None:
+        decode_status = "success" if args.decode_summary is not None else "not-run"
     reports_dir = project_root / "reports"
     history_path = reports_dir / "throughput_history.json"
     latest_path = reports_dir / "latest.json"
@@ -1028,6 +1191,8 @@ def main() -> None:
                 if args.decode_summary is not None
                 else None
             ),
+            status=args.status,
+            decode_status=decode_status,
         )
         runs = update_history(load_history(history_path), record)
         latest = latest_runs_by_config(runs)
@@ -1043,21 +1208,28 @@ def main() -> None:
         atomic_write(history_path, render_history_json(runs))
         atomic_write(latest_path, render_latest_json(runs))
         atomic_write(csv_path, render_csv(runs))
-        atomic_write(
-            svg_path,
-            chart_svg(
+        if homepage_series and homepage_labels:
+            homepage_svg = chart_svg(
                 homepage_series,
                 homepage_labels,
                 title="Latest DP8 vs PCP8 throughput by concurrency",
                 description=(
                     "Total token throughput at each tested concurrency for the "
-                    "latest successful DP8 and PCP8 benchmarks."
+                    "latest DP8 and PCP8 benchmark attempts with successful data."
                 ),
-            ),
-        )
-        atomic_write(
-            history_svg_path,
-            chart_svg(
+            )
+        else:
+            homepage_svg = empty_chart_svg(
+                title="Latest DP8 vs PCP8 throughput by concurrency",
+                description=(
+                    "No successful DP8 or PCP8 concurrency measurements are "
+                    "available for the latest benchmark attempts."
+                ),
+                id_prefix="throughput",
+            )
+        atomic_write(svg_path, homepage_svg)
+        if history_series and history_labels:
+            history_svg = chart_svg(
                 history_series,
                 history_labels,
                 title=(
@@ -1069,8 +1241,17 @@ def main() -> None:
                     "benchmark runs, ordered by completion time."
                 ),
                 id_prefix="history",
-            ),
-        )
+            )
+        else:
+            history_svg = empty_chart_svg(
+                title=(
+                    "DP8 vs PCP8 peak throughput over time — "
+                    f"last {visible_run_count} runs"
+                ),
+                description="No successful prefill measurements are available.",
+                id_prefix="history",
+            )
+        atomic_write(history_svg_path, history_svg)
         decode_history_title = (
             f"DP8 decode throughput over time — last {decode_run_count} runs"
         )
@@ -1099,10 +1280,14 @@ def main() -> None:
             render_readme_block(runs, args.table_limit),
         )
 
+    throughput = record["best_total_token_throughput"]
+    throughput_display = (
+        "not run" if throughput is None else f"{throughput:,.2f} tok/s"
+    )
     print(
-        f"Recorded {config_label(record['benchmark_config'])} peak throughput: "
-        f"{record['best_total_token_throughput']:,.2f} tok/s "
-        f"(run={record['run_id']}, concurrency={record['best_concurrency']})"
+        f"Recorded {config_label(record['benchmark_config'])} "
+        f"{record['status']} result: {throughput_display} "
+        f"(run={record['run_id']})"
     )
     print(f"Latest throughput chart: {svg_path}")
     print(f"Throughput history chart: {history_svg_path}")

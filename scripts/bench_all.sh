@@ -14,6 +14,7 @@ INPUT_LEN="${INPUT_LEN:-8192}"
 OUTPUT_LEN="${OUTPUT_LEN:-1}"
 BENCHMARK_CONFIG="${BENCHMARK_CONFIG:-dp8}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
+UPDATE_REPORTS="${UPDATE_REPORTS:-1}"
 
 RUN_DIR="${1:-}"
 if (( $# > 0 )); then
@@ -44,6 +45,10 @@ if [[ ! -f "$MODEL_DIR/tokenizer.json" ]]; then
 fi
 if [[ "$PUBLISH_REPORTS" != 0 && "$PUBLISH_REPORTS" != 1 ]]; then
   echo "ERROR: PUBLISH_REPORTS must be 0 or 1." >&2
+  exit 2
+fi
+if [[ "$UPDATE_REPORTS" != 0 && "$UPDATE_REPORTS" != 1 ]]; then
+  echo "ERROR: UPDATE_REPORTS must be 0 or 1." >&2
   exit 2
 fi
 
@@ -169,14 +174,21 @@ report_args=(
 )
 decode_summary="$RUN_DIR/results/dp8_decode_c256/aggregate.json"
 if [[ "$BENCHMARK_CONFIG" == "dp8" && -f "$decode_summary" ]]; then
-  report_args+=(--decode-summary "$decode_summary")
+  report_args+=(
+    --decode-summary "$decode_summary"
+    --decode-status success
+  )
 fi
 
-"$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
-  "${report_args[@]}"
+if (( UPDATE_REPORTS )); then
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
+    "${report_args[@]}"
 
-if (( PUBLISH_REPORTS )); then
-  "$SCRIPT_DIR/publish_report.sh"
+  if (( PUBLISH_REPORTS )); then
+    "$SCRIPT_DIR/publish_report.sh"
+  else
+    echo "Skipping Git report publication because PUBLISH_REPORTS=0."
+  fi
 else
-  echo "Skipping Git report publication because PUBLISH_REPORTS=0."
+  echo "Skipping report generation because UPDATE_REPORTS=0."
 fi

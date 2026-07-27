@@ -20,6 +20,9 @@ RUN_DP_DECODE=0
 RUN_DP_PREFILL=0
 RUN_PCP_PREFILL=0
 BENCHMARK_CONFIGS_JSON=
+DP_DECODE_STATUS=not-run
+DP_PREFILL_STATUS=not-run
+PCP_PREFILL_STATUS=not-run
 
 mkdir -p "$STATE_DIR" "$PROJECT_ROOT/runs"
 if [[ "${DAILY_BENCHMARK_LOCKED:-0}" != 1 ]]; then
@@ -52,9 +55,10 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
 .venv, then runs a real-weight C256 DP8 decode service followed by the existing
-dummy-weight DP8 and PCP8 prefill services. Reports are generated after each
-prefill suite and published once all selected benchmark groups succeed. Omit
---only to run all three benchmark groups.
+dummy-weight DP8 and PCP8 prefill services. Benchmark groups are independent:
+a failed group is recorded as -1 tok/s and does not prevent later groups from
+running. Reports are generated and published after all selected groups finish.
+Omit --only to run all three benchmark groups.
 EOF
 }
 
@@ -466,6 +470,7 @@ SERVER_PID=""
 SERVER_CONFIG=""
 RUN_SUCCEEDED=0
 REPORT_GENERATED=0
+BENCHMARK_FAILURES=0
 
 stop_server() {
   local target_config
@@ -596,15 +601,24 @@ run_decode_benchmark() {
   local run_index
 
   mkdir -p "$result_dir"
-  run_decode_smoke "$result_dir"
+  if ! run_decode_smoke "$result_dir"; then
+    return 1
+  fi
   for run_index in 1 2 3; do
-    run_decode_round "$result_dir" "$run_index"
+    if ! run_decode_round "$result_dir" "$run_index"; then
+      return 1
+    fi
   done
-  "$VENV_DIR/bin/python" "$SCRIPT_DIR/aggregate_decode_runs.py" \
-    --result-root "$result_dir" \
-    --runs 3
+  if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/aggregate_decode_runs.py" \
+      --result-root "$result_dir" \
+      --runs 3; then
+    return 1
+  fi
 
-  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
+  if ! curl -fsS --max-time 5 \
+      "http://127.0.0.1:$PORT/health" >/dev/null; then
+    return 1
+  fi
   echo "DP8 C256 decode benchmark completed successfully."
 }
 
@@ -612,12 +626,18 @@ run_prefill_benchmark() {
   local benchmark_config=$1
 
   echo "Running $benchmark_config prefill benchmark..."
-  BENCHMARK_CONFIG="$benchmark_config" PUBLISH_REPORTS=0 \
-    "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR" \
-    2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_benchmark.log"
+  if ! BENCHMARK_CONFIG="$benchmark_config" \
+      PUBLISH_REPORTS=0 \
+      UPDATE_REPORTS=0 \
+      "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR" \
+      2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_benchmark.log"; then
+    return 1
+  fi
 
-  curl -fsS --max-time 5 "http://127.0.0.1:$PORT/health" >/dev/null
-  REPORT_GENERATED=1
+  if ! curl -fsS --max-time 5 \
+      "http://127.0.0.1:$PORT/health" >/dev/null; then
+    return 1
+  fi
   echo "$benchmark_config prefill benchmark completed successfully."
 }
 
@@ -626,37 +646,138 @@ on_signal() {
   exit 130
 }
 
+record_dp_report() {
+  local -a report_args=(
+    --project-root "$PROJECT_ROOT"
+    --run-dir "$RUN_DIR"
+    --benchmark-config dp8
+    --status "$DP_PREFILL_STATUS"
+    --decode-status "$DP_DECODE_STATUS"
+    --input-length 8192
+    --output-length 1
+    --model Qwen3.5-397B-A17B-FP8
+  )
+
+  if [[ "$DP_PREFILL_STATUS" == success ]]; then
+    report_args+=(--summary "$RUN_DIR/results/dp8/summary.json")
+  fi
+  if [[ "$DP_DECODE_STATUS" == success ]]; then
+    report_args+=(
+      --decode-summary "$RUN_DIR/results/dp8_decode_c256/aggregate.json"
+    )
+  fi
+
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
+    "${report_args[@]}"
+  REPORT_GENERATED=1
+}
+
+record_pcp_report() {
+  local -a report_args=(
+    --project-root "$PROJECT_ROOT"
+    --run-dir "$RUN_DIR"
+    --benchmark-config pcp8
+    --status "$PCP_PREFILL_STATUS"
+    --decode-status not-run
+    --input-length 8192
+    --output-length 1
+    --model Qwen3.5-397B-A17B-FP8
+  )
+
+  if [[ "$PCP_PREFILL_STATUS" == success ]]; then
+    report_args+=(--summary "$RUN_DIR/results/pcp8/summary.json")
+  fi
+
+  "$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
+    "${report_args[@]}"
+  REPORT_GENERATED=1
+}
+
 trap stop_server EXIT
 trap on_signal INT TERM
 
 if (( RUN_DP_DECODE )); then
-  start_server dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$MODEL_DIR"
-  run_decode_benchmark
-  if (( RUN_DP_PREFILL || RUN_PCP_PREFILL )); then
+  if start_server \
+      dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$MODEL_DIR"; then
+    if run_decode_benchmark; then
+      DP_DECODE_STATUS=success
+    else
+      DP_DECODE_STATUS=failed
+      echo "ERROR: DP8 C256 decode benchmark failed; recording -1 tok/s." >&2
+    fi
+  else
+    DP_DECODE_STATUS=failed
+    echo "ERROR: DP8 C256 decode server failed; recording -1 tok/s." >&2
+  fi
+  if [[ "$DP_DECODE_STATUS" == failed ]] ||
+      (( RUN_DP_PREFILL || RUN_PCP_PREFILL )); then
     stop_server
   fi
 fi
 
 if (( RUN_DP_PREFILL )); then
-  start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"
-  run_prefill_benchmark dp8
-  if (( RUN_PCP_PREFILL )); then
+  if start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"; then
+    if run_prefill_benchmark dp8; then
+      DP_PREFILL_STATUS=success
+    else
+      DP_PREFILL_STATUS=failed
+      echo "ERROR: DP8 prefill benchmark failed; recording -1 tok/s." >&2
+    fi
+  else
+    DP_PREFILL_STATUS=failed
+    echo "ERROR: DP8 prefill server failed; recording -1 tok/s." >&2
+  fi
+  if [[ "$DP_PREFILL_STATUS" == failed ]] || (( RUN_PCP_PREFILL )); then
     stop_server
   fi
 fi
 
 if (( RUN_PCP_PREFILL )); then
-  start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"
-  run_prefill_benchmark pcp8
+  if start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"; then
+    if run_prefill_benchmark pcp8; then
+      PCP_PREFILL_STATUS=success
+    else
+      PCP_PREFILL_STATUS=failed
+      echo "ERROR: PCP8 prefill benchmark failed; recording -1 tok/s." >&2
+    fi
+  else
+    PCP_PREFILL_STATUS=failed
+    echo "ERROR: PCP8 prefill server failed; recording -1 tok/s." >&2
+  fi
+  if [[ "$PCP_PREFILL_STATUS" == failed ]]; then
+    stop_server
+  fi
+fi
+
+if (( RUN_DP_DECODE || RUN_DP_PREFILL )); then
+  record_dp_report
+fi
+if (( RUN_PCP_PREFILL )); then
+  record_pcp_report
 fi
 
 if (( PUBLISH_REPORTS && REPORT_GENERATED )); then
   "$SCRIPT_DIR/publish_report.sh"
 elif (( PUBLISH_REPORTS )); then
-  echo "Skipping Git report publication because the selected decode-only run"
-  echo "does not generate a prefill throughput report."
+  echo "Skipping Git report publication because no report was generated."
 else
   echo "Skipping Git report publication because PUBLISH_REPORTS=0."
+fi
+
+if (( RUN_DP_DECODE )) && [[ "$DP_DECODE_STATUS" == failed ]]; then
+  (( BENCHMARK_FAILURES += 1 ))
+fi
+if (( RUN_DP_PREFILL )) && [[ "$DP_PREFILL_STATUS" == failed ]]; then
+  (( BENCHMARK_FAILURES += 1 ))
+fi
+if (( RUN_PCP_PREFILL )) && [[ "$PCP_PREFILL_STATUS" == failed ]]; then
+  (( BENCHMARK_FAILURES += 1 ))
+fi
+
+if (( BENCHMARK_FAILURES )); then
+  echo "Daily TPU benchmark completed with $BENCHMARK_FAILURES failed group(s)"
+  echo "at $(date -u --iso-8601=seconds); reports were still generated."
+  exit 1
 fi
 
 RUN_SUCCEEDED=1

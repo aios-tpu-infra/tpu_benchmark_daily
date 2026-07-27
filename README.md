@@ -121,11 +121,12 @@ only the service required by the selected benchmark. DP8/PCP8 prefill-only
 runs use `--load-format dummy`, so they do not require real checkpoint weights
 in the shared model directory.
 
-DP or PCP prefill-only runs regenerate and publish their throughput report
-unless `PUBLISH_REPORTS=0`. A decode-only run records its artifacts beneath the
-new run directory but skips Git report publication because the current homepage
-report is anchored to a prefill result. With `--keep-server-running`, the server
-for the selected benchmark is kept after a successful selective run.
+Every selected benchmark group is reported and published unless
+`PUBLISH_REPORTS=0`, including decode-only runs. A failed group records
+throughput `-1`, does not prevent later selected groups from running, and still
+participates in the final report publication. The runner returns a nonzero exit
+status after publication when any selected group failed. With
+`--keep-server-running`, the server for a fully successful selective run is kept.
 
 Before updating or building, the full workflow stops an existing vLLM API
 server listening on `PORT` (18100 by default), including its worker process
@@ -137,7 +138,9 @@ C8/P65536/D32 smoke process followed by three independent
 C256/P65536/D1024 processes, and stops it. It then starts the existing
 dummy-weight DP8 and PCP8 services one at a time for their prefill suites. The
 complete run therefore contains three benchmark groups: DP8 C256 decode, DP8
-prefill, and PCP8 prefill. Servers are stopped after the benchmark by default.
+prefill, and PCP8 prefill. Each group is isolated so a startup or benchmark
+failure is recorded before the runner advances to the next group. Servers are
+stopped after the benchmark by default.
 Use `--keep-server-running` only for interactive debugging; when successful,
 it keeps the final PCP8 server alive.
 
@@ -197,12 +200,13 @@ The three benchmark groups share one run ID and one workflow start timestamp.
 The homepage combines them into one table row and uses that shared start time
 for `Test time (UTC)`.
 
-After every successful full benchmark, the runner records the highest
-`total_token_throughput` separately for DP8 and PCP8, regenerates the concurrency
-and time-series SVG charts, then commits `README.md` and `reports/` once and
-pushes that commit directly to `origin/main`. The GitHub repository homepage
-therefore shows both charts without HTML or a separate web service. Set
-`PUBLISH_REPORTS=0` to disable commit and push for a local-only run.
+After all selected benchmark groups finish, the runner records the highest
+`total_token_throughput` separately for successful DP8 and PCP8 groups and `-1`
+for failed groups, regenerates the concurrency and time-series SVG charts, then
+commits `README.md` and `reports/` once and pushes that commit directly to
+`origin/main`. Failed values remain visible in the table and JSON/CSV reports,
+while trend charts plot successful measurements only. Set `PUBLISH_REPORTS=0`
+to disable commit and push for a local-only run.
 
 The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
 The generated images are `reports/throughput.svg`,

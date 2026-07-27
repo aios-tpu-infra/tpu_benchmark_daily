@@ -56,7 +56,7 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
-read -r -a concurrencies <<< "${CONCURRENCIES:-1 2 4 8 16 32 64}"
+read -r -a concurrencies <<< "${CONCURRENCIES:-1 2 4 8 16 32 64 128 256}"
 if (( ${#concurrencies[@]} == 0 )); then
   echo "ERROR: CONCURRENCIES must contain at least one value." >&2
   exit 2
@@ -84,7 +84,7 @@ for concurrency in "${concurrencies[@]}"; do
     --random-input-len "$INPUT_LEN" \
     --random-output-len "$OUTPUT_LEN" \
     --random-range-ratio 0 \
-    --num-prompts 128 \
+    --num-prompts 512 \
     --request-rate inf \
     --max-concurrency "$concurrency" \
     --ignore-eos \

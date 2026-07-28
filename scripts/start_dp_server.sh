@@ -107,7 +107,6 @@ echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu version:       $TORCH_TPU_VERSION"
 echo "benchmark config:        dp8"
 echo "parallelism:             DP=8, PCP=1, TP=1"
-echo "load format: dummy"
 echo "compile sizes: $COMPILE_SIZES"
 
 exec "$VENV_DIR/bin/python" \
@@ -116,7 +115,6 @@ exec "$VENV_DIR/bin/python" \
   --port "$PORT" \
   --model "$MODEL_DIR" \
   --served-model-name "$SERVED_MODEL_NAME" \
-  --load-format dummy \
   --generation-config vllm \
   --seed 42 \
   --max-model-len "$MAX_MODEL_LEN" \

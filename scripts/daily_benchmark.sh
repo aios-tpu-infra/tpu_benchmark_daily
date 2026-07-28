@@ -54,11 +54,11 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
 
 The default full workflow stops an existing vLLM service on PORT, updates
 vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
-.venv, then runs a real-weight C256 DP8 decode service followed by the existing
-dummy-weight DP8 and PCP8 prefill services. Benchmark groups are independent:
-a failed group is recorded as -1 tok/s and does not prevent later groups from
-running. Reports are generated and published after all selected groups finish.
-Omit --only to run all three benchmark groups.
+.venv, then runs real-weight C256 DP8 decode, DP8 prefill, and PCP8 prefill
+services. Benchmark groups are independent: a failed group is recorded as
+-1 tok/s and does not prevent later groups from running. Reports are generated
+and published after all selected groups finish. Omit --only to run all three
+benchmark groups.
 EOF
 }
 
@@ -447,7 +447,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "torch_tpu_install_source": "pip",
   "model_directory": "$MODEL_DIR",
   "model_revision": "$model_revision",
-  "model_load_format": "dummy",
+  "model_load_format": "auto",
   "decode_model_directory": "$MODEL_DIR",
   "decode_model_load_format": "auto",
   "decode_workload": "C256/P65536/D1024",

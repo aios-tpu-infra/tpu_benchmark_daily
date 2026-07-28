@@ -2,13 +2,14 @@
 
 ## TL;DR
 
-本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 benchmark：真实权重
-TP1/DP8/EP8 C256 decode、dummy-weight DP8 prefill 和 dummy-weight PCP8
-prefill。Decode 使用 C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，
-按实际 peak-active plateau 统计；prefill 保持原有口径，避免破坏历史趋势。
+本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 真实权重 benchmark：
+TP1/DP8/EP8 C256 decode、DP8 prefill 和 PCP8 prefill。Decode 使用
+C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，按实际 peak-active
+plateau 统计。
 
-三组服务统一使用项目内 `models/Qwen3.5-397B-A17B-FP8`。Decode 从该目录
-加载完整权重；DP8/PCP8 prefill 对同一目录使用 `--load-format dummy`。
+三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
+不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
+直接比较，报告历史已从首轮真实权重测试 `20260728T012922Z` 重新开始。
 
 ## Recent benchmark throughput
 
@@ -31,15 +32,6 @@ Latest PCP8: **40,990.71 total tok/s** at concurrency **32** (`20260728T012922Z`
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol |
 |---|---|---:|---:|---:|---:|---|
 | `0026193187e1` | 2026-07-28 01:29 | 49,810.01 | 40,990.71 | -1.00 | — | failed |
-| `c908cf61549d` | 2026-07-27 07:26 | 50,460.53 | 44,029.38 | -1.00 | — | failed |
-| `0df7f8451750` | 2026-07-25 18:00 | 52,548.29 | 43,961.81 | 3,937.43 | 46.68 | C256 peak-active P50 |
-| `d4c736067443` | 2026-07-24 18:00 | 52,008.96 | 43,102.49 | 3,956.50 | 46.45 | C256 peak-active P50 |
-| `d87b06bee7c4` | 2026-07-24 00:32 | 51,494.71 | 34,121.60 | 632.24 | 18.41 | legacy peak/min |
-| `a03d8effc78a` | 2026-07-23 08:34 | 51,458.93 | 34,291.21 | 637.32 | 18.72 | legacy peak/min |
-| `a03d8effc78a` | 2026-07-23 06:45 | 51,476.87 | 34,276.38 | 637.69 | 20.51 | legacy peak/min |
-| — | 2026-07-22 08:15 | 48,359.05 | — | — | — | — |
-| `db5ae0ab3941` | 2026-07-22 05:07 | — | 34,296.71 | — | — | — |
-| `db5ae0ab3941` | 2026-07-22 01:40 | 46,240.26 | — | — | — | — |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
@@ -54,8 +46,8 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
   C256 decode service with unified pool, 4352-token pages, GMU 0.96, async
   scheduling, GDN v3, prefix cache disabled, and the same compile shapes as
   the current standalone C256 test.
-- `scripts/start_dp_server.sh`: starts the DP8/PCP1 vLLM server with dummy weights.
-- `scripts/start_pcp_server.sh`: starts the DP1/PCP8 vLLM server with dummy weights.
+- `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server.
+- `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
@@ -78,9 +70,9 @@ gcloud auth list --filter=status:ACTIVE
 ```
 
 完整 daily run 要求 `models/Qwen3.5-397B-A17B-FP8` 中存在真实模型权重。
-权重文件由环境在本地提供并被 Git 忽略；`--prepare-only` 和三个启动脚本
-只执行与 DP8/PCP8 一致的 config/tokenizer 元数据检查，decode 加载权重时
-仍会由模型加载器验证权重是否完整。
+权重文件由环境在本地提供并被 Git 忽略；`--prepare-only` 只执行
+config/tokenizer 元数据检查，三个启动脚本加载服务时会由模型加载器验证
+权重是否完整。
 
 The installer deliberately uses `gcloud auth print-access-token` instead of
 Application Default Credentials because these can represent different users or
@@ -117,9 +109,9 @@ scripts/daily_benchmark.sh --only pcp-prefill
 
 Omitting `--only` preserves the full three-group workflow. A selective run
 updates the environment in the same way as a full run, but validates and starts
-only the service required by the selected benchmark. DP8/PCP8 prefill-only
-runs use `--load-format dummy`, so they do not require real checkpoint weights
-in the shared model directory.
+only the service required by the selected benchmark. All selections load the
+real checkpoint and therefore require complete weights in the shared model
+directory.
 
 Every selected benchmark group is reported and published unless
 `PUBLISH_REPORTS=0`, including decode-only runs. A failed group records
@@ -135,18 +127,18 @@ fail safely. `--prepare-only` leaves any running service untouched.
 
 The runner first starts the real-weight DP8 C256 decode service, runs one
 C8/P65536/D32 smoke process followed by three independent
-C256/P65536/D1024 processes, and stops it. It then starts the existing
-dummy-weight DP8 and PCP8 services one at a time for their prefill suites. The
-complete run therefore contains three benchmark groups: DP8 C256 decode, DP8
-prefill, and PCP8 prefill. Each group is isolated so a startup or benchmark
-failure is recorded before the runner advances to the next group. Servers are
-stopped after the benchmark by default.
+C256/P65536/D1024 processes, and stops it. It then starts the real-weight DP8
+and PCP8 services one at a time for their prefill suites. The complete run
+therefore contains three benchmark groups: DP8 C256 decode, DP8 prefill, and
+PCP8 prefill. Each group is isolated so a startup or benchmark failure is
+recorded before the runner advances to the next group. Servers are stopped
+after the benchmark by default.
 Use `--keep-server-running` only for interactive debugging; when successful,
 it keeps the final PCP8 server alive.
 
 All three services use `models/Qwen3.5-397B-A17B-FP8` as their model
-directory. The decode service uses the real checkpoint from that directory;
-DP8 and PCP8 prefill continue to pass `--load-format dummy`.
+directory and load the real checkpoint from that directory with vLLM's default
+automatic load format.
 
 Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 `cache_salt`，因此
 不依赖 prefix cache 的跨请求复用；client 通过 `X-data-parallel-rank` 将

@@ -75,9 +75,33 @@ export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=0
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
 
 # Keep every configurable compilation cache on project storage and start each
-# server with an empty cache to avoid unbounded growth. TorchTPU's Tier-2 root
-# is fixed under /dev/shm and cannot be redirected to an absolute path, so
-# disable Tier-2 explicitly to make startup independent of /dev/shm.
+# server with an empty cache to avoid unbounded growth. Also remove the legacy
+# TorchInductor cache under /tmp, where older launches may have left large
+# AOTAutograd artifacts.
+LEGACY_TORCHINDUCTOR_CACHE="/tmp/torchinductor_$(id -un)"
+case "$LEGACY_TORCHINDUCTOR_CACHE" in
+  /tmp/torchinductor_*) ;;
+  *)
+    echo "ERROR: unsafe legacy TorchInductor cache path: $LEGACY_TORCHINDUCTOR_CACHE" >&2
+    exit 1
+    ;;
+esac
+if [[ -L "$LEGACY_TORCHINDUCTOR_CACHE" ]] ||
+  [[ -e "$LEGACY_TORCHINDUCTOR_CACHE" && ! -d "$LEGACY_TORCHINDUCTOR_CACHE" ]]; then
+  echo "ERROR: legacy TorchInductor cache path must be a real directory: $LEGACY_TORCHINDUCTOR_CACHE" >&2
+  exit 1
+fi
+if [[ -d "$LEGACY_TORCHINDUCTOR_CACHE" ]]; then
+  if [[ "$(stat -c '%u' "$LEGACY_TORCHINDUCTOR_CACHE")" != "$(id -u)" ]]; then
+    echo "ERROR: legacy TorchInductor cache is not owned by the current user: $LEGACY_TORCHINDUCTOR_CACHE" >&2
+    exit 1
+  fi
+  find "$LEGACY_TORCHINDUCTOR_CACHE" -mindepth 1 -delete
+fi
+
+# TorchTPU's Tier-2 root is fixed under /dev/shm and cannot be redirected to an
+# absolute path, so disable Tier-2 explicitly to make startup independent of
+# /dev/shm.
 COMPILE_CACHE_ROOT="$PROJECT_ROOT/cache/compile"
 case "$COMPILE_CACHE_ROOT" in
   "$PROJECT_ROOT"/cache/*) ;;
@@ -94,17 +118,56 @@ fi
 mkdir -p "$COMPILE_CACHE_ROOT"
 find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
 
+# Keep runtime temporary files on the project's data filesystem as well. This
+# path intentionally lives at the mount root so ZMQ's IPC endpoint remains
+# below its 107-character Unix socket limit.
+DATA_MOUNT="$(findmnt -n -o TARGET --target "$PROJECT_ROOT")"
+if [[ -z "$DATA_MOUNT" || "$DATA_MOUNT" == "/" || "$DATA_MOUNT" == "/dev/shm" ]]; then
+  echo "ERROR: project must be on a dedicated non-/dev/shm filesystem: $PROJECT_ROOT" >&2
+  exit 1
+fi
+RUNTIME_TMP_ROOT="$DATA_MOUNT/.tbd-$(id -u)"
+case "$RUNTIME_TMP_ROOT" in
+  "$DATA_MOUNT"/.tbd-*) ;;
+  *)
+    echo "ERROR: unsafe runtime temporary path: $RUNTIME_TMP_ROOT" >&2
+    exit 1
+    ;;
+esac
+if [[ -L "$RUNTIME_TMP_ROOT" ]] ||
+  [[ -e "$RUNTIME_TMP_ROOT" && ! -d "$RUNTIME_TMP_ROOT" ]]; then
+  echo "ERROR: runtime temporary path must be a real directory: $RUNTIME_TMP_ROOT" >&2
+  exit 1
+fi
+mkdir -p "$RUNTIME_TMP_ROOT"
+if [[ "$(stat -c '%u' "$RUNTIME_TMP_ROOT")" != "$(id -u)" ]]; then
+  echo "ERROR: runtime temporary path is not owned by the current user: $RUNTIME_TMP_ROOT" >&2
+  exit 1
+fi
+find "$RUNTIME_TMP_ROOT" -mindepth 1 -delete
+if (( ${#RUNTIME_TMP_ROOT} > 64 )); then
+  echo "ERROR: runtime temporary path is too long for ZMQ IPC: $RUNTIME_TMP_ROOT" >&2
+  exit 1
+fi
+
 export VLLM_CACHE_ROOT="$COMPILE_CACHE_ROOT/vllm/$CACHE_KEY"
 export VLLM_XLA_CACHE_PATH="$COMPILE_CACHE_ROOT/xla/$CACHE_KEY"
 export TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE=disabled
 export TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT="$VLLM_XLA_CACHE_PATH/torch_tpu_tier3"
+export TORCHINDUCTOR_CACHE_DIR="$COMPILE_CACHE_ROOT/torchinductor/$CACHE_KEY"
+export XDG_CACHE_HOME="$COMPILE_CACHE_ROOT/xdg/$CACHE_KEY"
+export TMPDIR="$RUNTIME_TMP_ROOT"
+export TMP="$RUNTIME_TMP_ROOT"
+export TEMP="$RUNTIME_TMP_ROOT"
 export VLLM_XLA_CHECK_RECOMPILATION=0
 export PYTHONUNBUFFERED=1
 
 mkdir -p \
   "$VLLM_CACHE_ROOT" \
   "$VLLM_XLA_CACHE_PATH" \
-  "$TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT"
+  "$TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT" \
+  "$TORCHINDUCTOR_CACHE_DIR" \
+  "$XDG_CACHE_HOME"
 
 PROFILE_DIR="${PROFILE_DIR:-${VLLM_TORCH_PROFILER_DIR:-}}"
 PROFILE_DELAY_ITERATIONS="${PROFILE_DELAY_ITERATIONS:-0}"
@@ -134,6 +197,8 @@ echo "benchmark config:        dp8"
 echo "parallelism:             DP=8, PCP=1, TP=1"
 echo "compile sizes: $COMPILE_SIZES"
 echo "compile cache: $COMPILE_CACHE_ROOT (cleared before startup)"
+echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
+echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
 
 exec "$VENV_DIR/bin/python" \

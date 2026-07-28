@@ -76,9 +76,10 @@ export RAY_memory_monitor_refresh_ms=0
 export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=0
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
 
-# TorchTPU's Tier-2 compilation cache defaults to /dev/shm, where cached
-# executables consume host RAM. Keep every compilation cache on project
-# storage and start each server with an empty cache to avoid unbounded growth.
+# Keep every configurable compilation cache on project storage and start each
+# server with an empty cache to avoid unbounded growth. TorchTPU's Tier-2 root
+# is fixed under /dev/shm and cannot be redirected to an absolute path, so
+# disable Tier-2 explicitly to make startup independent of /dev/shm.
 COMPILE_CACHE_ROOT="$PROJECT_ROOT/cache/compile"
 case "$COMPILE_CACHE_ROOT" in
   "$PROJECT_ROOT"/cache/*) ;;
@@ -95,17 +96,9 @@ fi
 mkdir -p "$COMPILE_CACHE_ROOT"
 find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
 
-TORCH_TPU_TIER2_CACHE_DIR="$COMPILE_CACHE_ROOT/torch_tpu_tier2"
-mkdir -p "$TORCH_TPU_TIER2_CACHE_DIR"
-# This TorchTPU version treats the Tier-2 setting as a cache name below its
-# fixed /dev/shm/torch_tpu_cache root. A relative path with parent components
-# makes the resulting filesystem path resolve to project storage.
-TORCH_TPU_TIER2_CACHE_NAME=$(
-  realpath --relative-to=/dev/shm/torch_tpu_cache "$TORCH_TPU_TIER2_CACHE_DIR"
-)
 export VLLM_CACHE_ROOT="$COMPILE_CACHE_ROOT/vllm/$CACHE_KEY"
 export VLLM_XLA_CACHE_PATH="$COMPILE_CACHE_ROOT/xla/$CACHE_KEY"
-export TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE="$TORCH_TPU_TIER2_CACHE_NAME"
+export TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE=disabled
 export TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT="$VLLM_XLA_CACHE_PATH/torch_tpu_tier3"
 export VLLM_XLA_CHECK_RECOMPILATION=0
 export PYTHONUNBUFFERED=1
@@ -113,7 +106,6 @@ export PYTHONUNBUFFERED=1
 mkdir -p \
   "$VLLM_CACHE_ROOT" \
   "$VLLM_XLA_CACHE_PATH" \
-  "$TORCH_TPU_TIER2_CACHE_DIR" \
   "$TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT"
 
 PROFILE_DIR="${PROFILE_DIR:-${VLLM_TORCH_PROFILER_DIR:-}}"
@@ -144,6 +136,7 @@ echo "benchmark config:        pcp8"
 echo "parallelism:             DP=1, PCP=8, TP=1"
 echo "compile sizes: $COMPILE_SIZES"
 echo "compile cache: $COMPILE_CACHE_ROOT (cleared before startup)"
+echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
 
 exec "$VENV_DIR/bin/python" \
   -m vllm.entrypoints.openai.api_server \

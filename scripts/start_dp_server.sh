@@ -71,7 +71,7 @@ export SKIP_JAX_PRECOMPILE=1
 export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
 export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
 export RAY_memory_monitor_refresh_ms=0
-export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=0
+export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
 
 # TorchTPU's Tier-2 compilation cache defaults to /dev/shm, where cached
@@ -157,7 +157,7 @@ exec "$VENV_DIR/bin/python" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --data-parallel-size 8 \
   --attention-backend CUSTOM \
-  --block-size 256 \
+  --block-size 4352 \
   --gpu-memory-utilization 0.90 \
   --kv-cache-dtype fp8 \
   --language-model-only \

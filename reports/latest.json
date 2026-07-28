@@ -2,7 +2,7 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-07-27T08:12:18+00:00",
+      "completed_at": "2026-07-28T02:15:37+00:00",
       "concurrency": 32,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
@@ -11,22 +11,22 @@
       "decode_window_p50_throughput": -1.0,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": 4324.651443328179,
+      "mean_ttft_ms": 5134.449709107372,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 6247.361576852347,
-      "request_throughput": 6.158981359417235,
-      "run_id": "20260727T072636Z",
+      "p99_ttft_ms": 6538.251806409535,
+      "request_throughput": 6.0795814118339,
+      "run_id": "20260728T012922Z",
       "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
-      "torchtpu_vllm_revision": "c908cf61549d1c3aba5ee6deb6148d38f45c3f13",
-      "total_token_throughput": 50460.53427770541
+      "torchtpu_vllm_revision": "0026193187e184f0a300fe527d7485a7b9b90112",
+      "total_token_throughput": 49810.010507155144
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-07-27T08:31:34+00:00",
-      "concurrency": 16,
+      "completed_at": "2026-07-28T02:45:46+00:00",
+      "concurrency": 32,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
       "decode_peak_active_tpot_p50_ms": null,
@@ -34,19 +34,19 @@
       "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": 2817.041950578073,
+      "mean_ttft_ms": 6210.854723964502,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 3783.3650503293393,
-      "request_throughput": 5.37402421989591,
-      "run_id": "20260727T072636Z",
+      "p99_ttft_ms": 6404.723756026215,
+      "request_throughput": 5.003138259661557,
+      "run_id": "20260728T012922Z",
       "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
-      "torchtpu_vllm_revision": "c908cf61549d1c3aba5ee6deb6148d38f45c3f13",
-      "total_token_throughput": 44029.380433607184
+      "torchtpu_vllm_revision": "0026193187e184f0a300fe527d7485a7b9b90112",
+      "total_token_throughput": 40990.71176140714
     }
   },
   "schema_version": 5,
-  "updated_at": "2026-07-27T08:31:34+00:00"
+  "updated_at": "2026-07-28T02:45:46+00:00"
 }

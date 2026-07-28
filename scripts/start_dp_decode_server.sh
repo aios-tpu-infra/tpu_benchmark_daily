@@ -15,7 +15,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-66560}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 BLOCK_SIZE="${BLOCK_SIZE:-4352}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.96}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.90}"
 COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4352,4384}"
 
 require_uint() {
@@ -107,18 +107,47 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:-$DEFAULT_LIBTPU_INIT_ARGS}"
 unset TPU_XPROF_DEVICE_COUNTERS
 unset VLLM_TORCH_PROFILER_DIR
 
-export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-$PROJECT_ROOT/cache/vllm/$CACHE_KEY}"
-export VLLM_XLA_CACHE_PATH="${VLLM_XLA_CACHE_PATH:-$PROJECT_ROOT/cache/xla/$CACHE_KEY}"
-DEFAULT_TORCHINDUCTOR_CACHE="$PROJECT_ROOT/cache/torchinductor/$CACHE_KEY"
-TORCHINDUCTOR_CACHE_DIR="${TORCHINDUCTOR_CACHE_DIR:-$DEFAULT_TORCHINDUCTOR_CACHE}"
-export TORCHINDUCTOR_CACHE_DIR
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$PROJECT_ROOT/cache/xdg/$CACHE_KEY}"
-export TMPDIR="${TMPDIR:-/tmp/tpu-benchmark-daily-c256}"
+# TorchTPU's Tier-2 compilation cache defaults to /dev/shm, where cached
+# executables consume host RAM. Keep every compilation cache on project
+# storage and start each server with an empty cache to avoid unbounded growth.
+COMPILE_CACHE_ROOT="$PROJECT_ROOT/cache/compile"
+case "$COMPILE_CACHE_ROOT" in
+  "$PROJECT_ROOT"/cache/*) ;;
+  *)
+    echo "ERROR: unsafe compilation cache path: $COMPILE_CACHE_ROOT" >&2
+    exit 1
+    ;;
+esac
+if [[ -L "$COMPILE_CACHE_ROOT" ]] ||
+  [[ -e "$COMPILE_CACHE_ROOT" && ! -d "$COMPILE_CACHE_ROOT" ]]; then
+  echo "ERROR: compilation cache path must be a real directory: $COMPILE_CACHE_ROOT" >&2
+  exit 1
+fi
+mkdir -p "$COMPILE_CACHE_ROOT"
+find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
+
+TORCH_TPU_TIER2_CACHE_DIR="$COMPILE_CACHE_ROOT/torch_tpu_tier2"
+mkdir -p "$TORCH_TPU_TIER2_CACHE_DIR"
+# This TorchTPU version treats the Tier-2 setting as a cache name below its
+# fixed /dev/shm/torch_tpu_cache root. A relative path with parent components
+# makes the resulting filesystem path resolve to project storage.
+TORCH_TPU_TIER2_CACHE_NAME=$(
+  realpath --relative-to=/dev/shm/torch_tpu_cache "$TORCH_TPU_TIER2_CACHE_DIR"
+)
+export VLLM_CACHE_ROOT="$COMPILE_CACHE_ROOT/vllm/$CACHE_KEY"
+export VLLM_XLA_CACHE_PATH="$COMPILE_CACHE_ROOT/xla/$CACHE_KEY"
+export TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE="$TORCH_TPU_TIER2_CACHE_NAME"
+export TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT="$VLLM_XLA_CACHE_PATH/torch_tpu_tier3"
+export TORCHINDUCTOR_CACHE_DIR="$COMPILE_CACHE_ROOT/torchinductor/$CACHE_KEY"
+export XDG_CACHE_HOME="$COMPILE_CACHE_ROOT/xdg/$CACHE_KEY"
+export TMPDIR="$COMPILE_CACHE_ROOT/tmp"
 export PYTHONUNBUFFERED=1
 
 mkdir -p \
   "$VLLM_CACHE_ROOT" \
   "$VLLM_XLA_CACHE_PATH" \
+  "$TORCH_TPU_TIER2_CACHE_DIR" \
+  "$TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT" \
   "$TORCHINDUCTOR_CACHE_DIR" \
   "$XDG_CACHE_HOME" \
   "$TMPDIR"
@@ -133,6 +162,7 @@ echo "torch_tpu version:       $TORCH_TPU_VERSION"
 echo "benchmark config:        dp8_decode_c256"
 echo "parallelism:             TP=1, DP=8, EP=8"
 echo "compile sizes:           $COMPILE_SIZES"
+echo "compile cache:           $COMPILE_CACHE_ROOT (cleared before startup)"
 
 exec "$VENV_DIR/bin/python" \
   -m vllm.entrypoints.openai.api_server \

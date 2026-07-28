@@ -26,11 +26,12 @@ Recent DP8 decode throughput over time:
 
 ![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
 
-Latest DP8: **49,810.01 total tok/s** at concurrency **32** (`20260728T012922Z`).
+Latest DP8: **not run** (`20260728T052903Z`).
 Latest PCP8: **40,990.71 total tok/s** at concurrency **32** (`20260728T012922Z`).
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol |
 |---|---|---:|---:|---:|---:|---|
+| `13a63bd52a50` | 2026-07-28 05:29 | — | — | 3,939.33 | 46.69 | C256 peak-active P50 |
 | `0026193187e1` | 2026-07-28 01:29 | 49,810.01 | 40,990.71 | -1.00 | — | failed |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.

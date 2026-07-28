@@ -26,11 +26,12 @@ Recent DP8 decode throughput over time:
 
 ![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
 
-Latest DP8: **failed (-1.00 total tok/s)** (`20260728T110401Z`).
-Latest PCP8: **failed (-1.00 total tok/s)** (`20260728T110401Z`).
+Latest DP8: **49,867.93 total tok/s** at concurrency **32** (`20260728T120139Z`).
+Latest PCP8: **41,011.87 total tok/s** at concurrency **16** (`20260728T120139Z`).
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol |
 |---|---|---:|---:|---:|---:|---|
+| `25c1985e4b85` | 2026-07-28 12:01 | 49,867.93 | 41,011.87 | 3,940.07 | 46.64 | C256 peak-active P50 |
 | `25c1985e4b85` | 2026-07-28 11:04 | -1.00 | -1.00 | -1.00 | — | failed |
 | `13a63bd52a50` | 2026-07-28 07:09 | — | -1.00 | — | — | — |
 | `13a63bd52a50` | 2026-07-28 06:33 | 44,300.90 | — | — | — | — |

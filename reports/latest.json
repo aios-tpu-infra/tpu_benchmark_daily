@@ -2,31 +2,94 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-07-29T00:54:20+00:00",
-      "concurrency": null,
+      "completed_at": "2026-07-29T09:31:25+00:00",
+      "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
-      "decode_peak_active_tpot_p50_ms": 46.668810003514714,
+      "decode_peak_active_tpot_p50_ms": 46.62987700430676,
       "decode_status": "success",
-      "decode_window_p50_throughput": 3937.7000000000003,
+      "decode_window_p50_throughput": 3943.6666666666665,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": null,
+      "mean_ttft_ms": 2579.8193184419347,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": null,
-      "request_throughput": -1.0,
-      "run_id": "20260728T233050Z",
-      "status": "failed",
+      "p99_ttft_ms": 3401.846217714774,
+      "prefill_ttft_status": "partial",
+      "request_throughput": 6.1516012296769595,
+      "run_id": "20260729T081713Z",
+      "single_request_ttft_results": [
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 8192,
+          "label": "8K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 1472.80280799896
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 16384,
+          "label": "16K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 3006.1161004996393
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 32768,
+          "label": "32K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 6262.754731491441
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 65536,
+          "label": "64K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 13515.362042482593
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 131072,
+          "label": "128K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 31005.046530990512
+        },
+        {
+          "completed": 0,
+          "error": "Never received a valid chunk to calculate TTFT.This response will be marked as failed!; Internal Server Error; Traceback (most recent call last):\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 1301, in _wrap_create_connection\n    sock = await aiohappyeyeballs.start_connection(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohappyeyeballs/impl.py\", line 124, in start_connection\n    raise first_exception\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohappyeyeballs/impl.py\", line 75, in start_connection\n    sock = await _connect_sock(\n           ^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohappyeyeballs/impl.py\", line 210, in _connect_sock\n    await loop.sock_connect(sock, address)\n  File \"/usr/lib/python3.12/asyncio/selector_events.py\", line 651, in sock_connect\n    return await fut\n           ^^^^^^^^^\n  File \"/usr/lib/python3.12/asyncio/selector_events.py\", line 691, in _sock_connect_cb\n    raise OSError(err, f'Connect call failed {address}')\nConnectionRefusedError: [Errno 111] Connect call failed ('127.0.0.1', 18100)\n\nThe above exception was the direct cause of the following exception:\n\nTraceback (most recent call last):\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/vllm/benchmarks/lib/endpoint_request_func.py\", line 201, in async_request_openai_completions\n    async with session.post(url=api_url, json=payload, headers=headers) as response:\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 1693, in __aenter__\n    self._resp: _RetType_co = await self._coro\n                              ^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 858, in _request\n    resp = await handler(req)\n           ^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/client.py\", line 812, in _connect_and_send_request\n    conn = await self._connector.connect(\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 657, in connect\n    proto = await self._create_connection(req, traces, timeout)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 1242, in _create_connection\n    _, proto = await self._create_direct_connection(req, traces, timeout)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 1620, in _create_direct_connection\n    raise last_exc\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 1589, in _create_direct_connection\n    transp, proto = await self._wrap_create_connection(\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/disks/tpu-qwen-01-data/xiaohao/workspace/tpu_benchmark_daily/.venv/lib/python3.12/site-packages/aiohttp/connector.py\", line 1324, in _wrap_create_connection\n    raise client_error(req.connection_key, exc) from exc\naiohttp.client_exceptions.ClientConnectorError: Cannot connect to host 127.0.0.1:18100 ssl:default [Connect call failed ('127.0.0.1', 18100)]\n",
+          "failed": 16,
+          "input_length": 258048,
+          "label": "252K",
+          "output_length": 1,
+          "status": "failed",
+          "ttft_ms": null
+        }
+      ],
+      "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
-      "torchtpu_vllm_revision": "bd7bad876f71afef3b184d9ecd59ce917f600694",
-      "total_token_throughput": -1.0
+      "torchtpu_vllm_revision": "386bfd1e937c513e8d98dc83e877e18d33da84b3",
+      "total_token_throughput": 50400.06887474333
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-07-29T00:44:23+00:00",
-      "concurrency": 16,
+      "completed_at": "2026-07-29T10:20:40+00:00",
+      "concurrency": 32,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
       "decode_peak_active_tpot_p50_ms": null,
@@ -34,19 +97,82 @@
       "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": 3153.4737522516707,
+      "mean_ttft_ms": 6211.210441034382,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 3223.862367894617,
-      "request_throughput": 5.005020558508273,
-      "run_id": "20260728T233050Z",
+      "p99_ttft_ms": 6410.649748965225,
+      "prefill_ttft_status": "success",
+      "request_throughput": 5.002774850676885,
+      "run_id": "20260729T081713Z",
+      "single_request_ttft_results": [
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 8192,
+          "label": "8K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 811.509658000432
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 16384,
+          "label": "16K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 859.7864705079701
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 32768,
+          "label": "32K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 1028.806723013986
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 65536,
+          "label": "64K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 2197.158483992098
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 131072,
+          "label": "128K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 4914.467433001846
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 258048,
+          "label": "252K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 11727.54617749888
+        }
+      ],
       "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260714090201",
-      "torchtpu_vllm_revision": "bd7bad876f71afef3b184d9ecd59ce917f600694",
-      "total_token_throughput": 41006.13343585828
+      "torchtpu_vllm_revision": "386bfd1e937c513e8d98dc83e877e18d33da84b3",
+      "total_token_throughput": 40987.73435159572
     }
   },
-  "schema_version": 5,
-  "updated_at": "2026-07-29T00:54:20+00:00"
+  "schema_version": 7,
+  "updated_at": "2026-07-29T10:20:40+00:00"
 }

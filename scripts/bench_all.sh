@@ -15,11 +15,26 @@ OUTPUT_LEN="${OUTPUT_LEN:-1}"
 BENCHMARK_CONFIG="${BENCHMARK_CONFIG:-dp8}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 UPDATE_REPORTS="${UPDATE_REPORTS:-1}"
+TEST_ONLY="${TEST_ONLY:-0}"
+FIXTURE_ROOT="${FIXTURE_ROOT:-$PROJECT_ROOT/tests/fixtures/prefill_throughput}"
 
-RUN_DIR="${1:-}"
-if (( $# > 0 )); then
+RUN_DIR=
+benchmark_args=()
+while (( $# > 0 )); do
+  case "$1" in
+    --test-only)
+      TEST_ONLY=1
+      ;;
+    *)
+      if [[ -z "$RUN_DIR" && "$1" != -* ]]; then
+        RUN_DIR=$1
+      else
+        benchmark_args+=("$1")
+      fi
+      ;;
+  esac
   shift
-fi
+done
 if [[ -z "$RUN_DIR" ]]; then
   RUN_DIR="$PROJECT_ROOT/runs/manual-$(date -u +%Y%m%dT%H%M%SZ)"
 fi
@@ -29,10 +44,26 @@ if [[ ! "$BENCHMARK_CONFIG" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
   echo "ERROR: invalid BENCHMARK_CONFIG '$BENCHMARK_CONFIG'." >&2
   exit 2
 fi
+if [[ "$TEST_ONLY" != 0 && "$TEST_ONLY" != 1 ]]; then
+  echo "ERROR: TEST_ONLY must be 0 or 1." >&2
+  exit 2
+fi
 
 RESULT_PREFIX="vllm_${BENCHMARK_CONFIG}_tp1_len${INPUT_LEN}"
 RESULT_DIR="$RUN_DIR/results/$BENCHMARK_CONFIG"
 mkdir -p "$RESULT_DIR"
+
+if (( TEST_ONLY )); then
+  fixture_summary="$FIXTURE_ROOT/$BENCHMARK_CONFIG/summary.json"
+  if [[ ! -f "$fixture_summary" ]]; then
+    echo "ERROR: throughput fixture is missing: $fixture_summary" >&2
+    exit 1
+  fi
+  cp "$fixture_summary" "$RESULT_DIR/summary.json"
+  echo "TEST_ONLY: replayed fixed throughput summary: $fixture_summary"
+  echo "TEST_ONLY: skipped vLLM benchmark requests."
+  exit 0
+fi
 
 if [[ ! -x "$VENV_DIR/bin/vllm" ]]; then
   echo "ERROR: vLLM CLI is missing: $VENV_DIR/bin/vllm" >&2
@@ -97,7 +128,7 @@ for concurrency in "${concurrencies[@]}"; do
     --result-dir "$RESULT_DIR" \
     --result-filename "$result_filename" \
     --label "${RESULT_PREFIX}_c${concurrency}" \
-    "$@"
+    "${benchmark_args[@]}"
 done
 
 "$VENV_DIR/bin/python" - \

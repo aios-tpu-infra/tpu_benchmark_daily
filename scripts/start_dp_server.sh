@@ -11,10 +11,23 @@ MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-69632}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 COMPILE_SIZES="${COMPILE_SIZES:-2,4,8,16,$MAX_NUM_BATCHED_TOKENS}"
+TEST_ONLY="${TEST_ONLY:-0}"
+
+server_args=()
+for argument in "$@"; do
+  case "$argument" in
+    --test-only)
+      TEST_ONLY=1
+      ;;
+    *)
+      server_args+=("$argument")
+      ;;
+  esac
+done
 
 require_uint() {
   local name=$1
@@ -29,6 +42,18 @@ require_uint PORT "$PORT"
 require_uint MAX_MODEL_LEN "$MAX_MODEL_LEN"
 require_uint MAX_NUM_BATCHED_TOKENS "$MAX_NUM_BATCHED_TOKENS"
 require_uint MAX_NUM_SEQS "$MAX_NUM_SEQS"
+if [[ "$TEST_ONLY" != 0 && "$TEST_ONLY" != 1 ]]; then
+  echo "ERROR: TEST_ONLY must be 0 or 1." >&2
+  exit 2
+fi
+
+if (( TEST_ONLY )); then
+  echo "TEST_ONLY: DP8 server startup skipped."
+  echo "parallelism:             DP=8, PCP=1, TP=1"
+  echo "max model length:        $MAX_MODEL_LEN"
+  echo "max batched tokens:      $MAX_NUM_BATCHED_TOKENS"
+  exit 0
+fi
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "ERROR: project environment is missing: $VENV_DIR" >&2
@@ -228,4 +253,4 @@ exec "$VENV_DIR/bin/python" \
   --return-tokens-as-token-ids \
   --compilation-config "$COMPILATION_CONFIG" \
   "${profile_args[@]}" \
-  "$@"
+  "${server_args[@]}"

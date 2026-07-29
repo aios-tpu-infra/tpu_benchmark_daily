@@ -25,6 +25,7 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("dp-decode", result.stdout)
         self.assertIn("dp-prefill", result.stdout)
         self.assertIn("pcp-prefill", result.stdout)
+        self.assertIn("--test-only", result.stdout)
 
     def test_only_requires_a_value(self) -> None:
         result = self.run_cli("--only")
@@ -37,6 +38,12 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid --only benchmark 'unknown'", result.stderr)
+
+    def test_test_only_rejects_decode_only_selection(self) -> None:
+        result = self.run_cli("--test-only", "--only", "dp-decode")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("covers DP/PCP prefill benchmarks only", result.stderr)
 
     def test_script_records_each_group_before_one_final_publish(self) -> None:
         script = DAILY_RUNNER.read_text(encoding="utf-8")
@@ -59,6 +66,20 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             script.index("if (( PUBLISH_REPORTS && REPORT_GENERATED )); then"),
             script.index("if (( BENCHMARK_FAILURES )); then"),
         )
+
+    def test_test_only_branch_precedes_environment_update_and_server_start(
+        self,
+    ) -> None:
+        script = DAILY_RUNNER.read_text(encoding="utf-8")
+
+        branch = script.index("if (( TEST_ONLY )); then")
+        environment_update = script.index('"$SCRIPT_DIR/update_environment.sh"')
+        normal_server_start = script.index("if (( RUN_DP_DECODE )); then")
+        self.assertLess(branch, environment_update)
+        self.assertLess(branch, normal_server_start)
+        self.assertIn("TEST_ONLY=1 UPDATE_REPORTS=0", script)
+        self.assertIn('"$SCRIPT_DIR/bench_prefill_ttft.sh"', script)
+        self.assertIn("TEST_ONLY preview README", script)
 
 
 if __name__ == "__main__":

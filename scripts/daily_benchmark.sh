@@ -15,6 +15,7 @@ KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
 PREPARE_ONLY=0
+TEST_ONLY=0
 BENCHMARK_SELECTION=all
 RUN_DP_DECODE=0
 RUN_DP_PREFILL=0
@@ -23,6 +24,8 @@ BENCHMARK_CONFIGS_JSON=
 DP_DECODE_STATUS=not-run
 DP_PREFILL_STATUS=not-run
 PCP_PREFILL_STATUS=not-run
+DP_PREFILL_TTFT_STATUS=not-run
+PCP_PREFILL_TTFT_STATUS=not-run
 
 mkdir -p "$STATE_DIR" "$PROJECT_ROOT/runs"
 if [[ "${DAILY_BENCHMARK_LOCKED:-0}" != 1 ]]; then
@@ -44,10 +47,14 @@ fi
 
 usage() {
   cat <<'EOF'
-Usage: scripts/daily_benchmark.sh [--prepare-only] [--keep-server-running]
+Usage: scripts/daily_benchmark.sh [--prepare-only] [--test-only]
+                                  [--keep-server-running]
                                   [--only BENCHMARK]
 
   --prepare-only         Prepare source/environment without touching a server.
+  --test-only            Replay fixed fixtures into an isolated report preview;
+                         do not update the environment, start a server, send
+                         benchmark requests, publish, or modify durable reports.
   --keep-server-running  Keep a successfully benchmarked server alive.
   --only BENCHMARK       Run only one benchmark group. BENCHMARK must be one of:
                          dp-decode, dp-prefill, or pcp-prefill.
@@ -57,7 +64,8 @@ vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
 .venv, then runs real-weight C256 DP8 decode, DP8 prefill, and PCP8 prefill
 services. Benchmark groups are independent: a failed group is recorded as
 -1 tok/s and does not prevent later groups from running. Reports are generated
-and published after all selected groups finish. Omit --only to run all three
+and published after all selected groups finish. DP8/PCP8 prefill selections
+also run the 8K–252K single-request TTFT sweep. Omit --only to run all three
 benchmark groups.
 EOF
 }
@@ -66,6 +74,9 @@ while (( $# > 0 )); do
   case "$1" in
     --prepare-only)
       PREPARE_ONLY=1
+      ;;
+    --test-only)
+      TEST_ONLY=1
       ;;
     --keep-server-running)
       KEEP_SERVER_RUNNING=1
@@ -135,6 +146,14 @@ if [[ "$KEEP_SERVER_RUNNING" != 0 && "$KEEP_SERVER_RUNNING" != 1 ]]; then
 fi
 if [[ "$PUBLISH_REPORTS" != 0 && "$PUBLISH_REPORTS" != 1 ]]; then
   echo "ERROR: PUBLISH_REPORTS must be 0 or 1." >&2
+  exit 2
+fi
+if (( TEST_ONLY && PREPARE_ONLY )); then
+  echo "ERROR: --test-only and --prepare-only cannot be used together." >&2
+  exit 2
+fi
+if (( TEST_ONLY && RUN_DP_DECODE && ! RUN_DP_PREFILL && ! RUN_PCP_PREFILL )); then
+  echo "ERROR: --test-only currently covers DP/PCP prefill benchmarks only." >&2
   exit 2
 fi
 
@@ -390,7 +409,13 @@ benchmark_started_at="$(
     "${timestamp:0:4}" "${timestamp:4:2}" "${timestamp:6:2}" \
     "${timestamp:9:2}" "${timestamp:11:2}" "${timestamp:13:2}"
 )"
-RUN_DIR="$PROJECT_ROOT/runs/$timestamp"
+if (( TEST_ONLY )); then
+  TEST_PREVIEW_ROOT="$STATE_DIR/test-only-preview/$timestamp"
+  TEST_PROJECT_ROOT="$TEST_PREVIEW_ROOT/project"
+  RUN_DIR="$TEST_PREVIEW_ROOT/runs/$timestamp"
+else
+  RUN_DIR="$PROJECT_ROOT/runs/$timestamp"
+fi
 mkdir -p "$RUN_DIR"
 exec > >(tee -a "$RUN_DIR/job.log") 2>&1
 
@@ -399,6 +424,74 @@ echo "Project root: $PROJECT_ROOT"
 echo "Run directory: $RUN_DIR"
 echo "Machine IP: $MACHINE_IP"
 echo "Benchmark selection: $BENCHMARK_SELECTION"
+
+if (( TEST_ONLY )); then
+  echo "TEST_ONLY: building an isolated fixture-backed report preview."
+  TEST_ONLY_PYTHON="${TEST_ONLY_PYTHON:-python3.12}"
+  if ! command -v "$TEST_ONLY_PYTHON" >/dev/null 2>&1; then
+    echo "ERROR: TEST_ONLY Python is missing: $TEST_ONLY_PYTHON" >&2
+    exit 1
+  fi
+  mkdir -p "$TEST_PROJECT_ROOT"
+  cp "$PROJECT_ROOT/README.md" "$TEST_PROJECT_ROOT/README.md"
+  cp -a "$PROJECT_ROOT/reports" "$TEST_PROJECT_ROOT/reports"
+  mkdir -p "$TEST_PROJECT_ROOT/.state"
+
+  cat > "$RUN_DIR/run_metadata.json" <<EOF
+{
+  "started_at": "$benchmark_started_at",
+  "machine_ip": "$MACHINE_IP",
+  "benchmark_selection": "$BENCHMARK_SELECTION",
+  "torchtpu_vllm_revision": "test-only-fixture",
+  "torch_tpu_version": "test-only-fixture",
+  "benchmark_configs": $BENCHMARK_CONFIGS_JSON,
+  "test_only": true,
+  "port": $PORT
+}
+EOF
+
+  if (( RUN_DP_PREFILL )); then
+    "$SCRIPT_DIR/start_dp_server.sh" --test-only
+    BENCHMARK_CONFIG=dp8 TEST_ONLY=1 UPDATE_REPORTS=0 PUBLISH_REPORTS=0 \
+      "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR"
+    BENCHMARK_CONFIG=dp8 TEST_ONLY=1 \
+      "$SCRIPT_DIR/bench_prefill_ttft.sh" "$RUN_DIR"
+    "$TEST_ONLY_PYTHON" "$SCRIPT_DIR/update_report.py" \
+      --project-root "$TEST_PROJECT_ROOT" \
+      --run-dir "$RUN_DIR" \
+      --benchmark-config dp8 \
+      --status success \
+      --decode-status not-run \
+      --ttft-status success \
+      --summary "$RUN_DIR/results/dp8/summary.json" \
+      --ttft-summary "$RUN_DIR/results/dp8/single_request_ttft/summary.json" \
+      --input-length 8192 \
+      --output-length 1 \
+      --model Qwen3.5-397B-A17B-FP8
+  fi
+  if (( RUN_PCP_PREFILL )); then
+    "$SCRIPT_DIR/start_pcp_server.sh" --test-only
+    BENCHMARK_CONFIG=pcp8 TEST_ONLY=1 UPDATE_REPORTS=0 PUBLISH_REPORTS=0 \
+      "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR"
+    BENCHMARK_CONFIG=pcp8 TEST_ONLY=1 \
+      "$SCRIPT_DIR/bench_prefill_ttft.sh" "$RUN_DIR"
+    "$TEST_ONLY_PYTHON" "$SCRIPT_DIR/update_report.py" \
+      --project-root "$TEST_PROJECT_ROOT" \
+      --run-dir "$RUN_DIR" \
+      --benchmark-config pcp8 \
+      --status success \
+      --decode-status not-run \
+      --ttft-status success \
+      --summary "$RUN_DIR/results/pcp8/summary.json" \
+      --ttft-summary "$RUN_DIR/results/pcp8/single_request_ttft/summary.json" \
+      --input-length 8192 \
+      --output-length 1 \
+      --model Qwen3.5-397B-A17B-FP8
+  fi
+  echo "TEST_ONLY preview README: $TEST_PROJECT_ROOT/README.md"
+  echo "TEST_ONLY preview reports: $TEST_PROJECT_ROOT/reports"
+  exit 0
+fi
 
 if (( ! PREPARE_ONLY )); then
   stop_existing_server
@@ -641,6 +734,23 @@ run_prefill_benchmark() {
   echo "$benchmark_config prefill benchmark completed successfully."
 }
 
+run_prefill_ttft_benchmark() {
+  local benchmark_config=$1
+
+  echo "Running $benchmark_config single-request prefill TTFT benchmark..."
+  if ! BENCHMARK_CONFIG="$benchmark_config" \
+      "$SCRIPT_DIR/bench_prefill_ttft.sh" "$RUN_DIR" \
+      2>&1 | tee "$RUN_DIR/${benchmark_config}_prefill_ttft_benchmark.log"; then
+    return 1
+  fi
+
+  if ! curl -fsS --max-time 5 \
+      "http://127.0.0.1:$PORT/health" >/dev/null; then
+    return 1
+  fi
+  echo "$benchmark_config single-request TTFT benchmark completed successfully."
+}
+
 on_signal() {
   echo "Received termination signal."
   exit 130
@@ -666,6 +776,12 @@ record_dp_report() {
       --decode-summary "$RUN_DIR/results/dp8_decode_c256/aggregate.json"
     )
   fi
+  report_args+=(--ttft-status "$DP_PREFILL_TTFT_STATUS")
+  if [[ "$DP_PREFILL_TTFT_STATUS" == success ]]; then
+    report_args+=(
+      --ttft-summary "$RUN_DIR/results/dp8/single_request_ttft/summary.json"
+    )
+  fi
 
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
     "${report_args[@]}"
@@ -686,6 +802,12 @@ record_pcp_report() {
 
   if [[ "$PCP_PREFILL_STATUS" == success ]]; then
     report_args+=(--summary "$RUN_DIR/results/pcp8/summary.json")
+  fi
+  report_args+=(--ttft-status "$PCP_PREFILL_TTFT_STATUS")
+  if [[ "$PCP_PREFILL_TTFT_STATUS" == success ]]; then
+    report_args+=(
+      --ttft-summary "$RUN_DIR/results/pcp8/single_request_ttft/summary.json"
+    )
   fi
 
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/update_report.py" \
@@ -723,11 +845,22 @@ if (( RUN_DP_PREFILL )); then
       DP_PREFILL_STATUS=failed
       echo "ERROR: DP8 prefill benchmark failed; recording -1 tok/s." >&2
     fi
+    if curl -fsS --max-time 5 \
+        "http://127.0.0.1:$PORT/health" >/dev/null &&
+        run_prefill_ttft_benchmark dp8; then
+      DP_PREFILL_TTFT_STATUS=success
+    else
+      DP_PREFILL_TTFT_STATUS=failed
+      echo "ERROR: DP8 single-request TTFT benchmark failed." >&2
+    fi
   else
     DP_PREFILL_STATUS=failed
+    DP_PREFILL_TTFT_STATUS=failed
     echo "ERROR: DP8 prefill server failed; recording -1 tok/s." >&2
   fi
-  if [[ "$DP_PREFILL_STATUS" == failed ]] || (( RUN_PCP_PREFILL )); then
+  if [[ "$DP_PREFILL_STATUS" == failed ]] ||
+      [[ "$DP_PREFILL_TTFT_STATUS" == failed ]] ||
+      (( RUN_PCP_PREFILL )); then
     stop_server
   fi
 fi
@@ -740,11 +873,21 @@ if (( RUN_PCP_PREFILL )); then
       PCP_PREFILL_STATUS=failed
       echo "ERROR: PCP8 prefill benchmark failed; recording -1 tok/s." >&2
     fi
+    if curl -fsS --max-time 5 \
+        "http://127.0.0.1:$PORT/health" >/dev/null &&
+        run_prefill_ttft_benchmark pcp8; then
+      PCP_PREFILL_TTFT_STATUS=success
+    else
+      PCP_PREFILL_TTFT_STATUS=failed
+      echo "ERROR: PCP8 single-request TTFT benchmark failed." >&2
+    fi
   else
     PCP_PREFILL_STATUS=failed
+    PCP_PREFILL_TTFT_STATUS=failed
     echo "ERROR: PCP8 prefill server failed; recording -1 tok/s." >&2
   fi
-  if [[ "$PCP_PREFILL_STATUS" == failed ]]; then
+  if [[ "$PCP_PREFILL_STATUS" == failed ]] ||
+      [[ "$PCP_PREFILL_TTFT_STATUS" == failed ]]; then
     stop_server
   fi
 fi
@@ -770,7 +913,13 @@ fi
 if (( RUN_DP_PREFILL )) && [[ "$DP_PREFILL_STATUS" == failed ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
+if (( RUN_DP_PREFILL )) && [[ "$DP_PREFILL_TTFT_STATUS" == failed ]]; then
+  (( BENCHMARK_FAILURES += 1 ))
+fi
 if (( RUN_PCP_PREFILL )) && [[ "$PCP_PREFILL_STATUS" == failed ]]; then
+  (( BENCHMARK_FAILURES += 1 ))
+fi
+if (( RUN_PCP_PREFILL )) && [[ "$PCP_PREFILL_TTFT_STATUS" == failed ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
 

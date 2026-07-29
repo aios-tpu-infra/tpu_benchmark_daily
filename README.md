@@ -5,7 +5,9 @@
 本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 真实权重 benchmark：
 TP1/DP8/EP8 C256 decode、DP8 prefill 和 PCP8 prefill。Decode 使用
 C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，按实际 peak-active
-plateau 统计。
+plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入长度
+8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；每档串行执行
+16 条 measured requests，并展示 median TTFT。
 
 三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
 不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
@@ -59,6 +61,8 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 - `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
+- `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
+  1 for each input length from 8K–252K and writes an independent TTFT summary.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
@@ -116,6 +120,21 @@ scripts/daily_benchmark.sh --only dp-prefill
 scripts/daily_benchmark.sh --only pcp-prefill
 ```
 
+Use fixture-backed test mode to exercise result extraction and report rendering
+without updating the environment, starting a server, sending requests, changing
+durable reports, or publishing:
+
+```bash
+scripts/daily_benchmark.sh --test-only
+```
+
+The isolated preview is written beneath
+`.state/test-only-preview/<timestamp>/project/`.
+The fixture values are for parser and presentation validation only and must not
+be treated as publishable benchmark measurements. The server scripts and both
+prefill benchmark scripts also accept `--test-only` directly. This mode covers
+the DP8/PCP8 prefill paths; the C256 decode benchmark remains real-run only.
+
 Omitting `--only` preserves the full three-group workflow. A selective run
 updates the environment in the same way as a full run, but validates and starts
 only the service required by the selected benchmark. All selections load the
@@ -140,10 +159,16 @@ C256/P65536/D1024 processes, and stops it. It then starts the real-weight DP8
 and PCP8 services one at a time for their prefill suites. The complete run
 therefore contains three benchmark groups: DP8 C256 decode, DP8 prefill, and
 PCP8 prefill. Each group is isolated so a startup or benchmark failure is
-recorded before the runner advances to the next group. Servers are stopped
-after the benchmark by default.
+recorded before the runner advances to the next group. The two prefill services
+run their existing 8K concurrency sweep first and their single-request TTFT
+sweep second, using 16 serial measured requests per input length. Servers are
+stopped after the benchmark by default.
 Use `--keep-server-running` only for interactive debugging; when successful,
 it keeps the final PCP8 server alive.
+
+The DP8 and PCP8 prefill launchers default to `--max-model-len 262144`.
+The longest TTFT input is 258048 tokens (252K), leaving room for the one-token
+output within the model's 262144-token context limit.
 
 All three services use `models/Qwen3.5-397B-A17B-FP8` as their model
 directory and load the real checkpoint from that directory with vLLM's default
@@ -187,9 +212,15 @@ runs/<UTC timestamp>/results/
 │   └── aggregate.csv
 ├── dp8/
 │   ├── summary.json
+│   ├── single_request_ttft/
+│   │   ├── summary.json
+│   │   └── vllm_dp8_single_request_ttft_len*.json
 │   └── vllm_dp8_tp1_len8192_c*.json
 └── pcp8/
     ├── summary.json
+    ├── single_request_ttft/
+    │   ├── summary.json
+    │   └── vllm_pcp8_single_request_ttft_len*.json
     └── vllm_pcp8_tp1_len8192_c*.json
 ```
 
@@ -212,8 +243,10 @@ to disable commit and push for a local-only run.
 The most recent local DP8 and PCP8 peaks are available in `reports/latest.json`.
 The generated images are `reports/throughput.svg`,
 `reports/throughput_history.svg`, and
-`reports/decode_throughput_history.svg`; every successful report update
-replaces all three files atomically. Decode history renders the legacy
+`reports/decode_throughput_history.svg`. The latest length-vs-TTFT comparison is
+`reports/prefill_ttft.svg`, with long-form history in
+`reports/prefill_ttft_history.csv`; every successful report update replaces the
+generated files atomically. Decode history renders the legacy
 peak-output metric and the current C256 peak-active window P50 metric as
 separate series because the two statistics are not directly comparable.
 Automatic publication uses the repository's configured Git SSH credentials. It

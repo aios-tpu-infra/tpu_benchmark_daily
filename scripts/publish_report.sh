@@ -14,6 +14,8 @@ required_reports=(
   throughput.svg
   throughput_history.svg
   decode_throughput_history.svg
+  prefill_ttft.svg
+  prefill_ttft_history.csv
   throughput_history.csv
   throughput_history.json
 )

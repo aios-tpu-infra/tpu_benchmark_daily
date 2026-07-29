@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
@@ -66,6 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--decode-summary", type=Path)
+    parser.add_argument("--ttft-summary", type=Path)
     parser.add_argument(
         "--status",
         choices=("success", "failed", "not-run"),
@@ -78,6 +79,14 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Decode benchmark status; defaults to success when --decode-summary "
             "is supplied and not-run otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--ttft-status",
+        choices=("success", "failed", "not-run"),
+        help=(
+            "Single-request prefill TTFT status; defaults to success when "
+            "--ttft-summary is supplied and not-run otherwise."
         ),
     )
     parser.add_argument("--benchmark-config")
@@ -261,6 +270,51 @@ def decode_metrics(
     return window_p50_throughput, peak_active_tpot_p50_ms
 
 
+def prefill_ttft_results(
+    summary: dict[str, Any],
+    benchmark_config: str,
+) -> list[dict[str, Any]]:
+    benchmark = summary.get("benchmark")
+    results = summary.get("results")
+    if not isinstance(benchmark, dict) or not isinstance(results, list) or not results:
+        raise ValueError("invalid single-request TTFT summary")
+    summary_config = normalize_benchmark_config(benchmark.get("benchmark_config"))
+    if summary_config != benchmark_config:
+        raise ValueError("TTFT summary benchmark_config does not match report record")
+    if positive_int(benchmark.get("concurrency"), "TTFT concurrency") != 1:
+        raise ValueError("single-request TTFT summary must use concurrency 1")
+
+    normalized = []
+    seen_lengths: set[int] = set()
+    for item in results:
+        if not isinstance(item, dict):
+            raise ValueError("TTFT summary results must contain objects")
+        input_length = positive_int(item.get("input_length"), "TTFT input_length")
+        if input_length in seen_lengths:
+            raise ValueError(f"duplicate TTFT input length: {input_length}")
+        seen_lengths.add(input_length)
+        completed = positive_int(item.get("completed"), "TTFT completed")
+        failed = int(item.get("failed", 0))
+        if failed != 0:
+            raise ValueError(f"TTFT result has {failed} failed requests")
+        ttft_ms = finite_float(item.get("ttft_ms"), "TTFT ttft_ms")
+        if ttft_ms < 0:
+            raise ValueError("TTFT latency must be non-negative")
+        normalized.append(
+            {
+                "label": str(item.get("label") or input_length),
+                "input_length": input_length,
+                "output_length": positive_int(
+                    item.get("output_length"), "TTFT output_length"
+                ),
+                "completed": completed,
+                "failed": failed,
+                "ttft_ms": ttft_ms,
+            }
+        )
+    return sorted(normalized, key=lambda item: item["input_length"])
+
+
 def build_record(
     *,
     project_root: Path,
@@ -271,13 +325,17 @@ def build_record(
     model: str | None,
     benchmark_config: str | None,
     decode_summary_path: Path | None = None,
+    ttft_summary_path: Path | None = None,
     status: str = "success",
     decode_status: str = "not-run",
+    ttft_status: str = "not-run",
 ) -> dict[str, Any]:
     if status not in {"success", "failed", "not-run"}:
         raise ValueError(f"invalid benchmark status: {status!r}")
     if decode_status not in {"success", "failed", "not-run"}:
         raise ValueError(f"invalid decode status: {decode_status!r}")
+    if ttft_status not in {"success", "failed", "not-run"}:
+        raise ValueError(f"invalid TTFT status: {ttft_status!r}")
     if status == "success" and summary_path is None:
         raise ValueError("a successful benchmark requires --summary")
 
@@ -328,6 +386,16 @@ def build_record(
     )
     if benchmark_config != "dp8" and decode_status != "not-run":
         raise ValueError("decode status can only be recorded on the dp8 record")
+
+    if ttft_status == "success":
+        if ttft_summary_path is None:
+            raise ValueError("successful TTFT benchmark requires --ttft-summary")
+        single_request_ttft_results = prefill_ttft_results(
+            load_json(ttft_summary_path),
+            benchmark_config,
+        )
+    else:
+        single_request_ttft_results = []
 
     if decode_status == "success":
         if decode_summary_path is None:
@@ -463,6 +531,8 @@ def build_record(
         LEGACY_DECODE_TPOT_FIELD: None,
         "decode_window_p50_throughput": decode_window_p50_throughput,
         "decode_peak_active_tpot_p50_ms": decode_peak_active_tpot_p50_ms,
+        "prefill_ttft_status": ttft_status,
+        "single_request_ttft_results": single_request_ttft_results,
         "torchtpu_vllm_revision": str(
             metadata.get("torchtpu_vllm_revision", "unknown")
         ),
@@ -476,6 +546,11 @@ def build_record(
             if summary_path is not None
             else ""
         ),
+        "ttft_summary_path": (
+            relative_path(ttft_summary_path, project_root)
+            if ttft_summary_path is not None
+            else ""
+        ),
         "concurrency_results": concurrency_results,
     }
 
@@ -485,7 +560,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, 4, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, 5, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -543,6 +618,15 @@ def load_history(path: Path) -> list[dict[str, Any]]:
             else:
                 decode_status = "not-run"
         run["decode_status"] = decode_status
+        ttft_status = str(run.get("prefill_ttft_status") or "").strip().lower()
+        ttft_results = run.get("single_request_ttft_results")
+        if not isinstance(ttft_results, list):
+            ttft_results = []
+        run["single_request_ttft_results"] = ttft_results
+        if ttft_status not in {"success", "failed", "not-run"}:
+            ttft_status = "success" if ttft_results else "not-run"
+        run["prefill_ttft_status"] = ttft_status
+        run.setdefault("ttft_summary_path", "")
     return runs
 
 
@@ -579,6 +663,15 @@ def update_history(
             and existing.get("decode_status") in {"success", "failed"}
         ):
             record["decode_status"] = existing["decode_status"]
+        if (
+            record.get("prefill_ttft_status") == "not-run"
+            and existing.get("prefill_ttft_status") in {"success", "failed"}
+        ):
+            record["prefill_ttft_status"] = existing["prefill_ttft_status"]
+            record["single_request_ttft_results"] = existing.get(
+                "single_request_ttft_results", []
+            )
+            record["ttft_summary_path"] = existing.get("ttft_summary_path", "")
     by_key[key] = record
     return sorted(
         by_key.values(),
@@ -616,6 +709,7 @@ def chart_svg(
     width: int = 1000,
     height: int = 390,
     standalone: bool = True,
+    value_suffix: str = " tok/s",
 ) -> str:
     points = [point for item in series for point in item["points"]]
     if not points or not x_labels:
@@ -742,7 +836,7 @@ def chart_svg(
             parts.append(
                 f'<text class="value" fill="{color}" text-anchor="{anchor}" '
                 f'x="{latest_x:.2f}" y="{label_y:.2f}">'
-                f"{latest_value:,.0f} tok/s</text>"
+                f"{latest_value:,.0f}{html.escape(value_suffix)}</text>"
             )
     parts.append("</svg>")
     return "".join(parts)
@@ -937,6 +1031,67 @@ def concurrency_chart_data(
     return series, [f"c{concurrency}" for concurrency in concurrencies]
 
 
+def latest_ttft_runs_by_config(
+    runs: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if run.get("prefill_ttft_status", "not-run") != "not-run":
+            latest[run["benchmark_config"]] = run
+    return latest
+
+
+def prefill_ttft_chart_data(
+    latest: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    input_lengths = sorted(
+        {
+            int(result["input_length"])
+            for run in latest.values()
+            if run.get("prefill_ttft_status") == "success"
+            for result in run.get("single_request_ttft_results", [])
+        }
+    )
+    index_by_length = {
+        input_length: index for index, input_length in enumerate(input_lengths)
+    }
+    labels_by_length = {
+        int(result["input_length"]): str(result["label"])
+        for run in latest.values()
+        for result in run.get("single_request_ttft_results", [])
+    }
+    series = []
+    for config, style in BENCHMARK_CONFIGS.items():
+        run = latest.get(config)
+        if run is None or run.get("prefill_ttft_status") != "success":
+            continue
+        results = run.get("single_request_ttft_results", [])
+        if not results:
+            continue
+        series.append(
+            {
+                "config": config,
+                "label": style["label"],
+                "color": style["color"],
+                "points": [
+                    {
+                        "x_index": index_by_length[int(result["input_length"])],
+                        "value": result["ttft_ms"],
+                        "tooltip": (
+                            f"{style['label']} {result['label']} · {run['run_id']}: "
+                            f"{result['ttft_ms']:,.2f} ms"
+                        ),
+                    }
+                    for result in results
+                ],
+            }
+        )
+    return series, [
+        labels_by_length.get(input_length, str(input_length))
+        for input_length in input_lengths
+    ]
+
+
 def render_history_json(runs: list[dict[str, Any]]) -> str:
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -972,6 +1127,10 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "decode_peak_active_tpot_p50_ms": run.get(
             "decode_peak_active_tpot_p50_ms"
         ),
+        "prefill_ttft_status": run.get("prefill_ttft_status", "not-run"),
+        "single_request_ttft_results": run.get(
+            "single_request_ttft_results", []
+        ),
         "torchtpu_vllm_revision": run["torchtpu_vllm_revision"],
         "torch_tpu_revision": run["torch_tpu_revision"],
         "torch_tpu_version": run["torch_tpu_version"],
@@ -996,6 +1155,53 @@ def render_csv(runs: list[dict[str, Any]]) -> str:
     writer.writeheader()
     for run in runs:
         writer.writerow({field: run.get(field, "") for field in CSV_FIELDS})
+    return output.getvalue()
+
+
+def render_prefill_ttft_csv(runs: list[dict[str, Any]]) -> str:
+    fields = (
+        "run_id",
+        "benchmark_config",
+        "status",
+        "completed_at",
+        "input_length",
+        "input_label",
+        "output_length",
+        "completed",
+        "failed",
+        "ttft_ms",
+    )
+    output = io.StringIO(newline="")
+    writer = csv.DictWriter(output, fieldnames=fields, lineterminator="\n")
+    writer.writeheader()
+    for run in runs:
+        ttft_status = run.get("prefill_ttft_status", "not-run")
+        results = run.get("single_request_ttft_results", [])
+        if results:
+            for result in results:
+                writer.writerow(
+                    {
+                        "run_id": run["run_id"],
+                        "benchmark_config": run["benchmark_config"],
+                        "status": ttft_status,
+                        "completed_at": run["completed_at"],
+                        "input_length": result["input_length"],
+                        "input_label": result["label"],
+                        "output_length": result["output_length"],
+                        "completed": result["completed"],
+                        "failed": result["failed"],
+                        "ttft_ms": result["ttft_ms"],
+                    }
+                )
+        elif ttft_status == "failed":
+            writer.writerow(
+                {
+                    "run_id": run["run_id"],
+                    "benchmark_config": run["benchmark_config"],
+                    "status": "failed",
+                    "completed_at": run["completed_at"],
+                }
+            )
     return output.getvalue()
 
 
@@ -1038,6 +1244,7 @@ def table_metric(value: Any, *, decimals: int = 2) -> str:
 
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     latest = latest_runs_by_config(runs)
+    latest_ttft = latest_ttft_runs_by_config(runs)
     latest_lines = []
     for config, style in BENCHMARK_CONFIGS.items():
         run = latest.get(config)
@@ -1060,6 +1267,53 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
                 f"at concurrency **{run['best_concurrency']}** "
                 f"(`{run['run_id']}`)."
             )
+    ttft_status_lines = []
+    for config, style in BENCHMARK_CONFIGS.items():
+        run = latest_ttft.get(config)
+        if run is None:
+            continue
+        status = run.get("prefill_ttft_status", "not-run")
+        sample_counts = {
+            int(result["completed"])
+            for result in run.get("single_request_ttft_results", [])
+        }
+        sample_suffix = ""
+        if status == "success" and len(sample_counts) == 1:
+            samples = sample_counts.pop()
+            sample_word = "sample" if samples == 1 else "samples"
+            sample_suffix = f", **{samples} serial {sample_word}/length**"
+        ttft_status_lines.append(
+            f"Latest {style['label']} single-request TTFT: "
+            f"**{status}**{sample_suffix} (`{run['run_id']}`)."
+        )
+
+    ttft_lengths = sorted(
+        {
+            int(result["input_length"])
+            for run in latest_ttft.values()
+            for result in run.get("single_request_ttft_results", [])
+        }
+    )
+    ttft_labels = {
+        int(result["input_length"]): str(result["label"])
+        for run in latest_ttft.values()
+        for result in run.get("single_request_ttft_results", [])
+    }
+    ttft_values = {
+        (
+            run["benchmark_config"],
+            int(result["input_length"]),
+        ): result["ttft_ms"]
+        for run in latest_ttft.values()
+        if run.get("prefill_ttft_status") == "success"
+        for result in run.get("single_request_ttft_results", [])
+    }
+    ttft_rows = [
+        f"| {ttft_labels.get(input_length, input_length)} | "
+        f"{table_metric(ttft_values.get(('dp8', input_length)))} | "
+        f"{table_metric(ttft_values.get(('pcp8', input_length)))} |"
+        for input_length in ttft_lengths
+    ]
     rows = []
     for grouped_run in report_table_runs(runs, table_limit):
         dp_run = grouped_run["configs"].get("dp8")
@@ -1113,6 +1367,11 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "![Latest DP8 vs PCP8 throughput by concurrency]"
             "(reports/throughput.svg)",
             "",
+            "Latest DP8 vs PCP8 single-request prefill TTFT by input length:",
+            "",
+            "![Latest DP8 vs PCP8 single-request prefill TTFT]"
+            "(reports/prefill_ttft.svg)",
+            "",
             "Recent DP8 vs PCP8 peak throughput over time:",
             "",
             "![Recent DP8 vs PCP8 peak throughput over time]"
@@ -1125,6 +1384,12 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "",
             *latest_lines,
             "",
+            *ttft_status_lines,
+            "",
+            "| Input length | DP8 TTFT (ms) | PCP8 TTFT (ms) |",
+            "|---:|---:|---:|",
+            *ttft_rows,
+            "",
             "| vllm-torchtpu commit | Test time (UTC) | "
             "DP peak prefill tok/s | PCP peak prefill tok/s | "
             "DP decode tok/s | DP decode TPOT (ms) | Decode protocol |",
@@ -1134,7 +1399,10 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "Failed benchmark groups are recorded as -1 tok/s in the table and "
             "JSON/CSV reports, while charts plot successful measurements only. "
             "The prefill charts compare DP8 and PCP8 throughput and track their "
-            "recent peaks. The decode chart keeps "
+            "recent peaks. The single-request TTFT chart uses concurrency 1, "
+            "runs requests serially, and plots median latency to the first "
+            "generated token across the completed samples. "
+            "The decode chart keeps "
             "legacy peak-output and current peak-active P50 statistics in "
             "separate series; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
@@ -1165,6 +1433,9 @@ def main() -> None:
     decode_status = args.decode_status
     if decode_status is None:
         decode_status = "success" if args.decode_summary is not None else "not-run"
+    ttft_status = args.ttft_status
+    if ttft_status is None:
+        ttft_status = "success" if args.ttft_summary is not None else "not-run"
     reports_dir = project_root / "reports"
     history_path = reports_dir / "throughput_history.json"
     latest_path = reports_dir / "latest.json"
@@ -1172,6 +1443,8 @@ def main() -> None:
     svg_path = reports_dir / "throughput.svg"
     history_svg_path = reports_dir / "throughput_history.svg"
     decode_history_svg_path = reports_dir / "decode_throughput_history.svg"
+    prefill_ttft_svg_path = reports_dir / "prefill_ttft.svg"
+    prefill_ttft_csv_path = reports_dir / "prefill_ttft_history.csv"
     readme_path = project_root / "README.md"
     lock_path = project_root / ".state" / "benchmark_report.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1191,8 +1464,14 @@ def main() -> None:
                 if args.decode_summary is not None
                 else None
             ),
+            ttft_summary_path=(
+                args.ttft_summary.resolve()
+                if args.ttft_summary is not None
+                else None
+            ),
             status=args.status,
             decode_status=decode_status,
+            ttft_status=ttft_status,
         )
         runs = update_history(load_history(history_path), record)
         latest = latest_runs_by_config(runs)
@@ -1204,10 +1483,15 @@ def main() -> None:
             visible_runs
         )
         decode_run_count = len(decode_history_labels)
+        latest_ttft = latest_ttft_runs_by_config(runs)
+        prefill_ttft_series, prefill_ttft_labels = prefill_ttft_chart_data(
+            latest_ttft
+        )
 
         atomic_write(history_path, render_history_json(runs))
         atomic_write(latest_path, render_latest_json(runs))
         atomic_write(csv_path, render_csv(runs))
+        atomic_write(prefill_ttft_csv_path, render_prefill_ttft_csv(runs))
         if homepage_series and homepage_labels:
             homepage_svg = chart_svg(
                 homepage_series,
@@ -1275,6 +1559,25 @@ def main() -> None:
                 id_prefix="decode-history",
             )
         atomic_write(decode_history_svg_path, decode_history_svg)
+        if prefill_ttft_series and prefill_ttft_labels:
+            prefill_ttft_svg = chart_svg(
+                prefill_ttft_series,
+                prefill_ttft_labels,
+                title="DP8 vs PCP8 single-request prefill TTFT",
+                description=(
+                    "Latency to the first generated token at concurrency one "
+                    "for the latest DP8 and PCP8 TTFT benchmark attempts."
+                ),
+                id_prefix="prefill-ttft",
+                value_suffix=" ms",
+            )
+        else:
+            prefill_ttft_svg = empty_chart_svg(
+                title="DP8 vs PCP8 single-request prefill TTFT",
+                description="No successful single-request TTFT data is available.",
+                id_prefix="prefill-ttft",
+            )
+        atomic_write(prefill_ttft_svg_path, prefill_ttft_svg)
         update_readme(
             readme_path,
             render_readme_block(runs, args.table_limit),
@@ -1292,6 +1595,7 @@ def main() -> None:
     print(f"Latest throughput chart: {svg_path}")
     print(f"Throughput history chart: {history_svg_path}")
     print(f"Decode throughput history chart: {decode_history_svg_path}")
+    print(f"Single-request prefill TTFT chart: {prefill_ttft_svg_path}")
 
 
 if __name__ == "__main__":

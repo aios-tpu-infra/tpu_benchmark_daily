@@ -1,0 +1,20 @@
+{
+  "backend": "openai",
+  "label": "vllm_pcp8_single_request_ttft_len32768",
+  "num_prompts": 1,
+  "request_rate": "inf",
+  "max_concurrency": 1,
+  "completed": 1,
+  "failed": 0,
+  "duration": 1.0396047219983302,
+  "total_input_tokens": 32768,
+  "total_output_tokens": 1,
+  "mean_ttft_ms": 1039.103231014451,
+  "median_ttft_ms": 1039.103231014451,
+  "p90_ttft_ms": 1039.103231014451,
+  "p99_ttft_ms": 1039.103231014451,
+  "input_lens": [32768],
+  "output_lens": [1],
+  "ttfts": [1.039103231014451],
+  "errors": [""]
+}

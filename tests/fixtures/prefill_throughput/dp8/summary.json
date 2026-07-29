@@ -1,0 +1,80 @@
+{
+  "benchmark": {
+    "benchmark_config": "dp8",
+    "input_length": 8192,
+    "model": "Qwen3.5-397B-A17B-FP8",
+    "output_length": 1
+  },
+  "best": {
+    "completed": 512,
+    "concurrency": 32,
+    "failed": 0,
+    "file": "vllm_dp8_tp1_len8192_c32.json",
+    "mean_ttft_ms": 5128.46,
+    "p99_ttft_ms": 6517.87,
+    "request_throughput": 6.0867,
+    "total_token_throughput": 49867.93
+  },
+  "results": [
+    {
+      "completed": 512,
+      "concurrency": 8,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c8.json",
+      "mean_ttft_ms": 2018.38,
+      "p99_ttft_ms": 2145.35,
+      "request_throughput": 3.9593,
+      "total_token_throughput": 32438.95
+    },
+    {
+      "completed": 512,
+      "concurrency": 16,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c16.json",
+      "mean_ttft_ms": 2590.22,
+      "p99_ttft_ms": 3379.50,
+      "request_throughput": 6.0511,
+      "total_token_throughput": 49576.70
+    },
+    {
+      "completed": 512,
+      "concurrency": 32,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c32.json",
+      "mean_ttft_ms": 5128.46,
+      "p99_ttft_ms": 6517.87,
+      "request_throughput": 6.0867,
+      "total_token_throughput": 49867.93
+    },
+    {
+      "completed": 512,
+      "concurrency": 64,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c64.json",
+      "mean_ttft_ms": 9940.64,
+      "p99_ttft_ms": 11757.26,
+      "request_throughput": 6.0811,
+      "total_token_throughput": 49822.74
+    },
+    {
+      "completed": 512,
+      "concurrency": 128,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c128.json",
+      "mean_ttft_ms": 18604.43,
+      "p99_ttft_ms": 22166.12,
+      "request_throughput": 6.0740,
+      "total_token_throughput": 49764.15
+    },
+    {
+      "completed": 512,
+      "concurrency": 256,
+      "failed": 0,
+      "file": "vllm_dp8_tp1_len8192_c256.json",
+      "mean_ttft_ms": 31967.94,
+      "p99_ttft_ms": 43004.50,
+      "request_throughput": 5.9800,
+      "total_token_throughput": 48994.44
+    }
+  ]
+}

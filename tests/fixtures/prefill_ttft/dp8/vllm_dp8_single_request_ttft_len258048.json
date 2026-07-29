@@ -1,0 +1,21 @@
+{
+  "backend": "openai",
+  "label": "vllm_dp8_single_request_ttft_len258048",
+  "num_prompts": 1,
+  "request_rate": "inf",
+  "max_concurrency": 1,
+  "completed": 1,
+  "failed": 0,
+  "duration": 64.125,
+  "total_input_tokens": 258048,
+  "total_output_tokens": 1,
+  "mean_ttft_ms": 64124.5,
+  "median_ttft_ms": 64124.5,
+  "p90_ttft_ms": 64124.5,
+  "p99_ttft_ms": 64124.5,
+  "input_lens": [258048],
+  "output_lens": [1],
+  "ttfts": [64.1245],
+  "errors": [""],
+  "fixture_note": "Synthetic success used only by TEST_ONLY; the real DP probe hit TPU e0200 at this length."
+}

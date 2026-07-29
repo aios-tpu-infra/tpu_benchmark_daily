@@ -70,7 +70,7 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 - `models/`: offline model metadata and locally provisioned checkpoint weights;
   checkpoint files are excluded from Git.
 - `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
-  C256 decode service with unified pool, 4352-token pages, GMU 0.96, async
+  C256 decode service with unified pool, 4352-token pages, GMU 0.932285943, async
   scheduling, GDN v3, prefix cache disabled, and the same compile shapes as
   the current standalone C256 test.
 - `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server.

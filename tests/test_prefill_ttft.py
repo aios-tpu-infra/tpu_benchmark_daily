@@ -56,11 +56,14 @@ class PrefillTtftAggregationTest(unittest.TestCase):
 
         self.assertEqual(summary["benchmark"]["concurrency"], 1)
         self.assertEqual(summary["benchmark"]["statistic"], "median_ttft_ms")
+        self.assertEqual(summary["status"], "success")
+        self.assertEqual(summary["failed_input_lengths"], [])
         self.assertEqual(summary["results"][-1]["label"], "252K")
+        self.assertEqual(summary["results"][-1]["status"], "success")
         self.assertEqual(summary["results"][-1]["ttft_ms"], 6000.0)
         self.assertEqual(summary["results"][-1]["raw_ttft_ms"], [6000.0])
 
-    def test_failed_request_is_rejected(self) -> None:
+    def test_failed_request_is_retained(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             result_dir = Path(temporary_directory)
             path = result_dir / "vllm_dp8_single_request_ttft_len8192.json"
@@ -71,18 +74,62 @@ class PrefillTtftAggregationTest(unittest.TestCase):
                         "max_concurrency": 1,
                         "completed": 0,
                         "failed": 1,
+                        "errors": ["request failed"],
                     }
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "completed=0, failed=1"):
-                AGGREGATE.aggregate(
-                    result_dir,
-                    "dp8",
-                    [8192],
-                    output_length=1,
-                    samples_per_length=1,
-                )
+            summary = AGGREGATE.aggregate(
+                result_dir,
+                "dp8",
+                [8192],
+                output_length=1,
+                samples_per_length=1,
+            )
+
+        self.assertEqual(summary["status"], "failed")
+        self.assertEqual(summary["successful_input_lengths"], [])
+        self.assertEqual(summary["failed_input_lengths"], [8192])
+        self.assertEqual(summary["results"][0]["status"], "failed")
+        self.assertIsNone(summary["results"][0]["ttft_ms"])
+        self.assertEqual(summary["results"][0]["error"], "request failed")
+
+    def test_missing_length_produces_partial_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result_dir = Path(temporary_directory)
+            path = result_dir / "vllm_dp8_single_request_ttft_len8192.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "num_prompts": 1,
+                        "max_concurrency": 1,
+                        "completed": 1,
+                        "failed": 0,
+                        "input_lens": [8192],
+                        "output_lens": [1],
+                        "ttfts": [1.5],
+                        "mean_ttft_ms": 1500.0,
+                        "median_ttft_ms": 1500.0,
+                        "p90_ttft_ms": 1500.0,
+                        "p99_ttft_ms": 1500.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            summary = AGGREGATE.aggregate(
+                result_dir,
+                "dp8",
+                [8192, 258048],
+                output_length=1,
+                samples_per_length=1,
+            )
+
+        self.assertEqual(summary["status"], "partial")
+        self.assertEqual(summary["successful_input_lengths"], [8192])
+        self.assertEqual(summary["failed_input_lengths"], [258048])
+        self.assertEqual(summary["results"][1]["status"], "failed")
+        self.assertEqual(summary["results"][1]["failed"], 1)
+        self.assertIn("missing", summary["results"][1]["error"])
 
     def test_ttfts_seconds_must_match_reported_milliseconds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

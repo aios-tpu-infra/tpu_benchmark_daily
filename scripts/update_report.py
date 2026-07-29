@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ttft-status",
-        choices=("success", "failed", "not-run"),
+        choices=("success", "partial", "failed", "not-run"),
         help=(
             "Single-request prefill TTFT status; defaults to success when "
             "--ttft-summary is supplied and not-run otherwise."
@@ -293,13 +293,24 @@ def prefill_ttft_results(
         if input_length in seen_lengths:
             raise ValueError(f"duplicate TTFT input length: {input_length}")
         seen_lengths.add(input_length)
-        completed = positive_int(item.get("completed"), "TTFT completed")
+        result_status = str(item.get("status") or "").strip().lower()
+        completed = int(item.get("completed", 0))
         failed = int(item.get("failed", 0))
-        if failed != 0:
-            raise ValueError(f"TTFT result has {failed} failed requests")
-        ttft_ms = finite_float(item.get("ttft_ms"), "TTFT ttft_ms")
-        if ttft_ms < 0:
-            raise ValueError("TTFT latency must be non-negative")
+        if completed < 0 or failed < 0:
+            raise ValueError("TTFT completed/failed counts must be non-negative")
+        if result_status not in {"success", "failed"}:
+            result_status = "failed" if failed or completed == 0 else "success"
+        if result_status == "success":
+            if completed <= 0 or failed != 0:
+                raise ValueError("successful TTFT result has invalid request counts")
+            ttft_ms: float | None = finite_float(
+                item.get("ttft_ms"),
+                "TTFT ttft_ms",
+            )
+            if ttft_ms < 0:
+                raise ValueError("TTFT latency must be non-negative")
+        else:
+            ttft_ms = None
         normalized.append(
             {
                 "label": str(item.get("label") or input_length),
@@ -309,7 +320,9 @@ def prefill_ttft_results(
                 ),
                 "completed": completed,
                 "failed": failed,
+                "status": result_status,
                 "ttft_ms": ttft_ms,
+                "error": str(item.get("error") or ""),
             }
         )
     return sorted(normalized, key=lambda item: item["input_length"])
@@ -334,7 +347,7 @@ def build_record(
         raise ValueError(f"invalid benchmark status: {status!r}")
     if decode_status not in {"success", "failed", "not-run"}:
         raise ValueError(f"invalid decode status: {decode_status!r}")
-    if ttft_status not in {"success", "failed", "not-run"}:
+    if ttft_status not in {"success", "partial", "failed", "not-run"}:
         raise ValueError(f"invalid TTFT status: {ttft_status!r}")
     if status == "success" and summary_path is None:
         raise ValueError("a successful benchmark requires --summary")
@@ -387,13 +400,29 @@ def build_record(
     if benchmark_config != "dp8" and decode_status != "not-run":
         raise ValueError("decode status can only be recorded on the dp8 record")
 
-    if ttft_status == "success":
+    if ttft_status in {"success", "partial"} or (
+        ttft_status == "failed" and ttft_summary_path is not None
+    ):
         if ttft_summary_path is None:
-            raise ValueError("successful TTFT benchmark requires --ttft-summary")
+            raise ValueError("successful/partial TTFT benchmark requires --ttft-summary")
         single_request_ttft_results = prefill_ttft_results(
             load_json(ttft_summary_path),
             benchmark_config,
         )
+        result_statuses = {
+            result["status"] for result in single_request_ttft_results
+        }
+        if result_statuses == {"success"}:
+            derived_ttft_status = "success"
+        elif "success" in result_statuses:
+            derived_ttft_status = "partial"
+        else:
+            derived_ttft_status = "failed"
+        if ttft_status != derived_ttft_status:
+            raise ValueError(
+                "TTFT status does not match per-length results: "
+                f"{ttft_status!r} != {derived_ttft_status!r}"
+            )
     else:
         single_request_ttft_results = []
 
@@ -560,7 +589,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, 4, 5, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -622,9 +651,34 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         ttft_results = run.get("single_request_ttft_results")
         if not isinstance(ttft_results, list):
             ttft_results = []
+        for result in ttft_results:
+            if not isinstance(result, dict):
+                continue
+            result_status = str(result.get("status") or "").strip().lower()
+            if result_status not in {"success", "failed"}:
+                result_status = (
+                    "failed"
+                    if int(result.get("failed", 0)) > 0
+                    or result.get("ttft_ms") is None
+                    else "success"
+                )
+            result["status"] = result_status
+            result.setdefault("error", "")
         run["single_request_ttft_results"] = ttft_results
-        if ttft_status not in {"success", "failed", "not-run"}:
-            ttft_status = "success" if ttft_results else "not-run"
+        if ttft_status not in {"success", "partial", "failed", "not-run"}:
+            result_statuses = {
+                result.get("status")
+                for result in ttft_results
+                if isinstance(result, dict)
+            }
+            if result_statuses == {"success"}:
+                ttft_status = "success"
+            elif "success" in result_statuses:
+                ttft_status = "partial"
+            elif result_statuses:
+                ttft_status = "failed"
+            else:
+                ttft_status = "not-run"
         run["prefill_ttft_status"] = ttft_status
         run.setdefault("ttft_summary_path", "")
     return runs
@@ -665,7 +719,8 @@ def update_history(
             record["decode_status"] = existing["decode_status"]
         if (
             record.get("prefill_ttft_status") == "not-run"
-            and existing.get("prefill_ttft_status") in {"success", "failed"}
+            and existing.get("prefill_ttft_status")
+            in {"success", "partial", "failed"}
         ):
             record["prefill_ttft_status"] = existing["prefill_ttft_status"]
             record["single_request_ttft_results"] = existing.get(
@@ -1048,7 +1103,6 @@ def prefill_ttft_chart_data(
         {
             int(result["input_length"])
             for run in latest.values()
-            if run.get("prefill_ttft_status") == "success"
             for result in run.get("single_request_ttft_results", [])
         }
     )
@@ -1063,9 +1117,17 @@ def prefill_ttft_chart_data(
     series = []
     for config, style in BENCHMARK_CONFIGS.items():
         run = latest.get(config)
-        if run is None or run.get("prefill_ttft_status") != "success":
+        if run is None or run.get("prefill_ttft_status") not in {
+            "success",
+            "partial",
+        }:
             continue
-        results = run.get("single_request_ttft_results", [])
+        results = [
+            result
+            for result in run.get("single_request_ttft_results", [])
+            if result.get("status", "success") == "success"
+            and result.get("ttft_ms") is not None
+        ]
         if not results:
             continue
         series.append(
@@ -1162,6 +1224,7 @@ def render_prefill_ttft_csv(runs: list[dict[str, Any]]) -> str:
     fields = (
         "run_id",
         "benchmark_config",
+        "benchmark_status",
         "status",
         "completed_at",
         "input_length",
@@ -1183,7 +1246,8 @@ def render_prefill_ttft_csv(runs: list[dict[str, Any]]) -> str:
                     {
                         "run_id": run["run_id"],
                         "benchmark_config": run["benchmark_config"],
-                        "status": ttft_status,
+                        "benchmark_status": ttft_status,
+                        "status": result.get("status", "success"),
                         "completed_at": run["completed_at"],
                         "input_length": result["input_length"],
                         "input_label": result["label"],
@@ -1198,6 +1262,7 @@ def render_prefill_ttft_csv(runs: list[dict[str, Any]]) -> str:
                 {
                     "run_id": run["run_id"],
                     "benchmark_config": run["benchmark_config"],
+                    "benchmark_status": "failed",
                     "status": "failed",
                     "completed_at": run["completed_at"],
                 }
@@ -1276,9 +1341,10 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         sample_counts = {
             int(result["completed"])
             for result in run.get("single_request_ttft_results", [])
+            if result.get("status", "success") == "success"
         }
         sample_suffix = ""
-        if status == "success" and len(sample_counts) == 1:
+        if status in {"success", "partial"} and len(sample_counts) == 1:
             samples = sample_counts.pop()
             sample_word = "sample" if samples == 1 else "samples"
             sample_suffix = f", **{samples} serial {sample_word}/length**"
@@ -1299,19 +1365,27 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         for run in latest_ttft.values()
         for result in run.get("single_request_ttft_results", [])
     }
-    ttft_values = {
+    ttft_results_by_cell = {
         (
             run["benchmark_config"],
             int(result["input_length"]),
-        ): result["ttft_ms"]
+        ): result
         for run in latest_ttft.values()
-        if run.get("prefill_ttft_status") == "success"
         for result in run.get("single_request_ttft_results", [])
     }
+
+    def ttft_cell(config: str, input_length: int) -> str:
+        result = ttft_results_by_cell.get((config, input_length))
+        if result is None:
+            return "—"
+        if result.get("status", "success") == "failed":
+            return "failed"
+        return table_metric(result.get("ttft_ms"))
+
     ttft_rows = [
         f"| {ttft_labels.get(input_length, input_length)} | "
-        f"{table_metric(ttft_values.get(('dp8', input_length)))} | "
-        f"{table_metric(ttft_values.get(('pcp8', input_length)))} |"
+        f"{ttft_cell('dp8', input_length)} | "
+        f"{ttft_cell('pcp8', input_length)} |"
         for input_length in ttft_lengths
     ]
     rows = []

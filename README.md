@@ -134,6 +134,14 @@ The fixture values are for parser and presentation validation only and must not
 be treated as publishable benchmark measurements. The server scripts and both
 prefill benchmark scripts also accept `--test-only` directly. This mode covers
 the DP8/PCP8 prefill paths; the C256 decode benchmark remains real-run only.
+Set `TTFT_TEST_ONLY_FAILED_LENGTHS` to a space-separated subset of the configured
+input lengths to preview partial-failure rendering. For example, this marks only
+252K as failed while retaining the other fixture-backed DP8 measurements:
+
+```bash
+TTFT_TEST_ONLY_FAILED_LENGTHS=258048 \
+  scripts/daily_benchmark.sh --test-only --only dp-prefill
+```
 
 Omitting `--only` preserves the full three-group workflow. A selective run
 updates the environment in the same way as a full run, but validates and starts
@@ -145,7 +153,12 @@ Every selected benchmark group is reported and published unless
 `PUBLISH_REPORTS=0`, including decode-only runs. A failed group records
 throughput `-1`, does not prevent later selected groups from running, and still
 participates in the final report publication. The runner returns a nonzero exit
-status after publication when any selected group failed. With
+status after publication when any selected group failed. TTFT input lengths are
+handled independently: successful lengths remain visible, failed lengths are
+shown as `failed`, and the TTFT chart plots only successful points. A partial
+TTFT sweep does not stop the remaining lengths or the following PCP8 group, but
+is counted as a failure in the final process status after reports are published.
+With
 `--keep-server-running`, the server for a fully successful selective run is kept.
 
 Before updating or building, the full workflow stops an existing vLLM API

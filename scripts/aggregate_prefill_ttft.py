@@ -53,6 +53,7 @@ def aggregate(
 ) -> dict[str, Any]:
     expected = set(expected_input_lengths)
     records: dict[int, dict[str, Any]] = {}
+    paths_by_length: dict[int, Path] = {}
 
     for path in sorted(result_dir.glob("vllm_*_single_request_ttft_len*.json")):
         match = RESULT_RE.search(path.name)
@@ -61,19 +62,71 @@ def aggregate(
         nominal_input_length = int(match.group("input_length"))
         if nominal_input_length not in expected:
             continue
-        if nominal_input_length in records:
+        if nominal_input_length in paths_by_length:
             raise ValueError(
                 f"duplicate TTFT result for {nominal_input_length}: {path}"
             )
+        paths_by_length[nominal_input_length] = path
+
+    for nominal_input_length in expected_input_lengths:
+        path = paths_by_length.get(nominal_input_length)
+        if path is None:
+            records[nominal_input_length] = {
+                "file": (
+                    f"vllm_{benchmark_config}_single_request_ttft_"
+                    f"len{nominal_input_length}.json"
+                ),
+                "label": length_label(nominal_input_length),
+                "input_length": nominal_input_length,
+                "output_length": output_length,
+                "status": "failed",
+                "completed": 0,
+                "failed": samples_per_length,
+                "ttft_ms": None,
+                "mean_ttft_ms": None,
+                "median_ttft_ms": None,
+                "p90_ttft_ms": None,
+                "p99_ttft_ms": None,
+                "raw_ttft_ms": [],
+                "error": "vLLM result file is missing",
+            }
+            continue
 
         data = load_json(path)
         completed = int(data.get("completed", 0))
         failed = int(data.get("failed", 0))
         if completed != samples_per_length or failed != 0:
-            raise ValueError(
-                f"{path} completed={completed}, failed={failed}; expected "
-                f"completed={samples_per_length}, failed=0"
+            errors = data.get("errors")
+            error_messages = (
+                list(
+                    dict.fromkeys(
+                        str(value) for value in errors if str(value).strip()
+                    )
+                )
+                if isinstance(errors, list)
+                else []
             )
+            records[nominal_input_length] = {
+                "file": path.name,
+                "label": length_label(nominal_input_length),
+                "input_length": nominal_input_length,
+                "output_length": output_length,
+                "status": "failed",
+                "completed": completed,
+                "failed": failed or max(samples_per_length - completed, 1),
+                "ttft_ms": None,
+                "mean_ttft_ms": None,
+                "median_ttft_ms": None,
+                "p90_ttft_ms": None,
+                "p99_ttft_ms": None,
+                "raw_ttft_ms": [],
+                "error": "; ".join(error_messages)
+                or (
+                    f"completed={completed}, failed={failed}; expected "
+                    f"completed={samples_per_length}, failed=0"
+                ),
+            }
+            continue
         if int(data.get("num_prompts", 0)) != samples_per_length:
             raise ValueError(f"unexpected num_prompts in {path}")
         if int(data.get("max_concurrency", 0)) != 1:
@@ -121,6 +174,7 @@ def aggregate(
             "label": length_label(nominal_input_length),
             "input_length": nominal_input_length,
             "output_length": output_length,
+            "status": "success",
             "completed": completed,
             "failed": failed,
             "ttft_ms": median_ttft_ms,
@@ -129,14 +183,29 @@ def aggregate(
             "p90_ttft_ms": finite_float(data["p90_ttft_ms"], "p90_ttft_ms", path),
             "p99_ttft_ms": finite_float(data["p99_ttft_ms"], "p99_ttft_ms", path),
             "raw_ttft_ms": raw_ttft_ms,
+            "error": "",
         }
 
-    missing = [value for value in expected_input_lengths if value not in records]
-    if missing:
-        raise ValueError(f"missing TTFT result lengths in {result_dir}: {missing}")
+    successful_lengths = [
+        value
+        for value in expected_input_lengths
+        if records[value]["status"] == "success"
+    ]
+    failed_lengths = [
+        value
+        for value in expected_input_lengths
+        if records[value]["status"] == "failed"
+    ]
+    if not failed_lengths:
+        status = "success"
+    elif successful_lengths:
+        status = "partial"
+    else:
+        status = "failed"
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
+        "status": status,
         "benchmark": {
             "benchmark_config": benchmark_config,
             "concurrency": 1,
@@ -145,6 +214,8 @@ def aggregate(
             "samples_per_length": samples_per_length,
             "statistic": "median_ttft_ms",
         },
+        "successful_input_lengths": successful_lengths,
+        "failed_input_lengths": failed_lengths,
         "results": [records[value] for value in expected_input_lengths],
     }
 

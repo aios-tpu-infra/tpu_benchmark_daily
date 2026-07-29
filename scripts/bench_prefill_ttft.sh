@@ -16,6 +16,7 @@ TTFT_OUTPUT_LEN="${TTFT_OUTPUT_LEN:-1}"
 TTFT_NUM_PROMPTS="${TTFT_NUM_PROMPTS:-16}"
 TEST_ONLY="${TEST_ONLY:-0}"
 FIXTURE_ROOT="${FIXTURE_ROOT:-$PROJECT_ROOT/tests/fixtures/prefill_ttft}"
+TTFT_TEST_ONLY_FAILED_LENGTHS="${TTFT_TEST_ONLY_FAILED_LENGTHS:-}"
 
 RUN_DIR=
 while (( $# > 0 )); do
@@ -67,6 +68,14 @@ for input_length in "${input_lengths[@]}"; do
     exit 2
   fi
 done
+read -r -a test_only_failed_lengths <<< "$TTFT_TEST_ONLY_FAILED_LENGTHS"
+for input_length in "${test_only_failed_lengths[@]}"; do
+  if [[ ! "$input_length" =~ ^[0-9]+$ ]] ||
+      [[ " ${input_lengths[*]} " != *" $input_length "* ]]; then
+    echo "ERROR: invalid test-only failed TTFT length '$input_length'." >&2
+    exit 2
+  fi
+done
 
 RESULT_DIR="$RUN_DIR/results/$BENCHMARK_CONFIG/single_request_ttft"
 mkdir -p "$RESULT_DIR"
@@ -104,10 +113,15 @@ for input_length in "${input_lengths[@]}"; do
       echo "ERROR: TTFT fixture is missing: $fixture_path" >&2
       exit 1
     fi
+    replay_args=()
+    if [[ " ${test_only_failed_lengths[*]} " == *" $input_length "* ]]; then
+      replay_args+=(--failed)
+    fi
     "$AGGREGATE_PYTHON" "$SCRIPT_DIR/replay_prefill_ttft_fixture.py" \
       --source "$fixture_path" \
       --destination "$result_path" \
-      --samples "$TTFT_NUM_PROMPTS"
+      --samples "$TTFT_NUM_PROMPTS" \
+      "${replay_args[@]}"
     echo "TEST_ONLY: replayed $fixture_path as $TTFT_NUM_PROMPTS serial requests"
     continue
   fi
@@ -116,8 +130,13 @@ for input_length in "${input_lengths[@]}"; do
   if [[ "$BENCHMARK_CONFIG" == "dp8" ]]; then
     header_args=(--header X-data-parallel-rank=0)
   fi
+  if ! curl -fsS --max-time 5 \
+      "http://$HOST:$PORT/health" >/dev/null; then
+    echo "ERROR: service is unavailable; recording length $input_length as failed." >&2
+    continue
+  fi
   echo "Running $BENCHMARK_CONFIG single-request TTFT at input length $input_length..."
-  "$VENV_DIR/bin/vllm" bench serve \
+  if ! "$VENV_DIR/bin/vllm" bench serve \
     --backend openai \
     --host "$HOST" \
     --port "$PORT" \
@@ -141,7 +160,9 @@ for input_length in "${input_lengths[@]}"; do
     --result-dir "$RESULT_DIR" \
     --result-filename "$result_filename" \
     --label "${result_prefix}_len${input_length}" \
-    "${header_args[@]}"
+    "${header_args[@]}"; then
+    echo "ERROR: TTFT request length $input_length failed; continuing." >&2
+  fi
 done
 
 "$AGGREGATE_PYTHON" "$SCRIPT_DIR/aggregate_prefill_ttft.py" \

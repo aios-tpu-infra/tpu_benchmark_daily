@@ -26,6 +26,7 @@ DP_PREFILL_STATUS=not-run
 PCP_PREFILL_STATUS=not-run
 DP_PREFILL_TTFT_STATUS=not-run
 PCP_PREFILL_TTFT_STATUS=not-run
+PREFILL_TTFT_LAST_STATUS=
 
 mkdir -p "$STATE_DIR" "$PROJECT_ROOT/runs"
 if [[ "${DAILY_BENCHMARK_LOCKED:-0}" != 1 ]]; then
@@ -456,13 +457,18 @@ EOF
       "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR"
     BENCHMARK_CONFIG=dp8 TEST_ONLY=1 \
       "$SCRIPT_DIR/bench_prefill_ttft.sh" "$RUN_DIR"
+    dp_test_ttft_status=$(
+      "$TEST_ONLY_PYTHON" -c \
+        'import json,sys; print(json.load(open(sys.argv[1]))["status"])' \
+        "$RUN_DIR/results/dp8/single_request_ttft/summary.json"
+    )
     "$TEST_ONLY_PYTHON" "$SCRIPT_DIR/update_report.py" \
       --project-root "$TEST_PROJECT_ROOT" \
       --run-dir "$RUN_DIR" \
       --benchmark-config dp8 \
       --status success \
       --decode-status not-run \
-      --ttft-status success \
+      --ttft-status "$dp_test_ttft_status" \
       --summary "$RUN_DIR/results/dp8/summary.json" \
       --ttft-summary "$RUN_DIR/results/dp8/single_request_ttft/summary.json" \
       --input-length 8192 \
@@ -475,13 +481,18 @@ EOF
       "$SCRIPT_DIR/bench_all.sh" "$RUN_DIR"
     BENCHMARK_CONFIG=pcp8 TEST_ONLY=1 \
       "$SCRIPT_DIR/bench_prefill_ttft.sh" "$RUN_DIR"
+    pcp_test_ttft_status=$(
+      "$TEST_ONLY_PYTHON" -c \
+        'import json,sys; print(json.load(open(sys.argv[1]))["status"])' \
+        "$RUN_DIR/results/pcp8/single_request_ttft/summary.json"
+    )
     "$TEST_ONLY_PYTHON" "$SCRIPT_DIR/update_report.py" \
       --project-root "$TEST_PROJECT_ROOT" \
       --run-dir "$RUN_DIR" \
       --benchmark-config pcp8 \
       --status success \
       --decode-status not-run \
-      --ttft-status success \
+      --ttft-status "$pcp_test_ttft_status" \
       --summary "$RUN_DIR/results/pcp8/summary.json" \
       --ttft-summary "$RUN_DIR/results/pcp8/single_request_ttft/summary.json" \
       --input-length 8192 \
@@ -736,6 +747,7 @@ run_prefill_benchmark() {
 
 run_prefill_ttft_benchmark() {
   local benchmark_config=$1
+  local summary_path="$RUN_DIR/results/$benchmark_config/single_request_ttft/summary.json"
 
   echo "Running $benchmark_config single-request prefill TTFT benchmark..."
   if ! BENCHMARK_CONFIG="$benchmark_config" \
@@ -744,11 +756,23 @@ run_prefill_ttft_benchmark() {
     return 1
   fi
 
+  PREFILL_TTFT_LAST_STATUS=$(
+    "$VENV_DIR/bin/python" -c \
+      'import json,sys; print(json.load(open(sys.argv[1]))["status"])' \
+      "$summary_path"
+  )
+  case "$PREFILL_TTFT_LAST_STATUS" in
+    success|partial|failed) ;;
+    *)
+      echo "ERROR: invalid TTFT summary status '$PREFILL_TTFT_LAST_STATUS'." >&2
+      return 1
+      ;;
+  esac
   if ! curl -fsS --max-time 5 \
       "http://127.0.0.1:$PORT/health" >/dev/null; then
-    return 1
+    echo "WARNING: $benchmark_config server exited after TTFT results were saved." >&2
   fi
-  echo "$benchmark_config single-request TTFT benchmark completed successfully."
+  echo "$benchmark_config single-request TTFT benchmark status: $PREFILL_TTFT_LAST_STATUS."
 }
 
 on_signal() {
@@ -777,7 +801,7 @@ record_dp_report() {
     )
   fi
   report_args+=(--ttft-status "$DP_PREFILL_TTFT_STATUS")
-  if [[ "$DP_PREFILL_TTFT_STATUS" == success ]]; then
+  if [[ -f "$RUN_DIR/results/dp8/single_request_ttft/summary.json" ]]; then
     report_args+=(
       --ttft-summary "$RUN_DIR/results/dp8/single_request_ttft/summary.json"
     )
@@ -804,7 +828,7 @@ record_pcp_report() {
     report_args+=(--summary "$RUN_DIR/results/pcp8/summary.json")
   fi
   report_args+=(--ttft-status "$PCP_PREFILL_TTFT_STATUS")
-  if [[ "$PCP_PREFILL_TTFT_STATUS" == success ]]; then
+  if [[ -f "$RUN_DIR/results/pcp8/single_request_ttft/summary.json" ]]; then
     report_args+=(
       --ttft-summary "$RUN_DIR/results/pcp8/single_request_ttft/summary.json"
     )
@@ -845,10 +869,8 @@ if (( RUN_DP_PREFILL )); then
       DP_PREFILL_STATUS=failed
       echo "ERROR: DP8 prefill benchmark failed; recording -1 tok/s." >&2
     fi
-    if curl -fsS --max-time 5 \
-        "http://127.0.0.1:$PORT/health" >/dev/null &&
-        run_prefill_ttft_benchmark dp8; then
-      DP_PREFILL_TTFT_STATUS=success
+    if run_prefill_ttft_benchmark dp8; then
+      DP_PREFILL_TTFT_STATUS=$PREFILL_TTFT_LAST_STATUS
     else
       DP_PREFILL_TTFT_STATUS=failed
       echo "ERROR: DP8 single-request TTFT benchmark failed." >&2
@@ -859,7 +881,7 @@ if (( RUN_DP_PREFILL )); then
     echo "ERROR: DP8 prefill server failed; recording -1 tok/s." >&2
   fi
   if [[ "$DP_PREFILL_STATUS" == failed ]] ||
-      [[ "$DP_PREFILL_TTFT_STATUS" == failed ]] ||
+      [[ "$DP_PREFILL_TTFT_STATUS" != success ]] ||
       (( RUN_PCP_PREFILL )); then
     stop_server
   fi
@@ -873,10 +895,8 @@ if (( RUN_PCP_PREFILL )); then
       PCP_PREFILL_STATUS=failed
       echo "ERROR: PCP8 prefill benchmark failed; recording -1 tok/s." >&2
     fi
-    if curl -fsS --max-time 5 \
-        "http://127.0.0.1:$PORT/health" >/dev/null &&
-        run_prefill_ttft_benchmark pcp8; then
-      PCP_PREFILL_TTFT_STATUS=success
+    if run_prefill_ttft_benchmark pcp8; then
+      PCP_PREFILL_TTFT_STATUS=$PREFILL_TTFT_LAST_STATUS
     else
       PCP_PREFILL_TTFT_STATUS=failed
       echo "ERROR: PCP8 single-request TTFT benchmark failed." >&2
@@ -887,7 +907,7 @@ if (( RUN_PCP_PREFILL )); then
     echo "ERROR: PCP8 prefill server failed; recording -1 tok/s." >&2
   fi
   if [[ "$PCP_PREFILL_STATUS" == failed ]] ||
-      [[ "$PCP_PREFILL_TTFT_STATUS" == failed ]]; then
+      [[ "$PCP_PREFILL_TTFT_STATUS" != success ]]; then
     stop_server
   fi
 fi
@@ -913,13 +933,17 @@ fi
 if (( RUN_DP_PREFILL )) && [[ "$DP_PREFILL_STATUS" == failed ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
-if (( RUN_DP_PREFILL )) && [[ "$DP_PREFILL_TTFT_STATUS" == failed ]]; then
+if (( RUN_DP_PREFILL )) &&
+    [[ "$DP_PREFILL_TTFT_STATUS" != success ]] &&
+    [[ "$DP_PREFILL_TTFT_STATUS" != not-run ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
 if (( RUN_PCP_PREFILL )) && [[ "$PCP_PREFILL_STATUS" == failed ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
-if (( RUN_PCP_PREFILL )) && [[ "$PCP_PREFILL_TTFT_STATUS" == failed ]]; then
+if (( RUN_PCP_PREFILL )) &&
+    [[ "$PCP_PREFILL_TTFT_STATUS" != success ]] &&
+    [[ "$PCP_PREFILL_TTFT_STATUS" != not-run ]]; then
   (( BENCHMARK_FAILURES += 1 ))
 fi
 

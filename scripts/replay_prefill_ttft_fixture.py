@@ -35,7 +35,12 @@ def load_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def expand_fixture(data: dict[str, Any], samples: int) -> dict[str, Any]:
+def expand_fixture(
+    data: dict[str, Any],
+    samples: int,
+    *,
+    failed: bool = False,
+) -> dict[str, Any]:
     if int(data.get("completed", 0)) != 1 or int(data.get("failed", 0)) != 0:
         raise ValueError("TTFT source fixture must contain one successful request")
 
@@ -69,6 +74,19 @@ def expand_fixture(data: dict[str, Any], samples: int) -> dict[str, Any]:
         f"{data.get('fixture_note', '')} "
         f"TEST_ONLY repeats the captured sample {samples} times serially."
     ).strip()
+    if failed:
+        expanded["completed"] = 0
+        expanded["failed"] = samples
+        expanded["output_lens"] = [0] * samples
+        expanded["ttfts"] = [0.0] * samples
+        expanded["errors"] = ["TEST_ONLY injected length failure"] * samples
+        expanded["total_input_tokens"] = 0
+        expanded["total_output_tokens"] = 0
+        expanded["mean_ttft_ms"] = 0.0
+        expanded["median_ttft_ms"] = 0.0
+        expanded["p90_ttft_ms"] = 0.0
+        expanded["p99_ttft_ms"] = 0.0
+        expanded["fixture_note"] += " This input length is marked failed."
     return expanded
 
 
@@ -77,12 +95,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--samples", type=positive_int, required=True)
+    parser.add_argument("--failed", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    expanded = expand_fixture(load_json(args.source), args.samples)
+    expanded = expand_fixture(
+        load_json(args.source),
+        args.samples,
+        failed=args.failed,
+    )
     args.destination.parent.mkdir(parents=True, exist_ok=True)
     args.destination.write_text(
         json.dumps(expanded, indent=2, sort_keys=True) + "\n",

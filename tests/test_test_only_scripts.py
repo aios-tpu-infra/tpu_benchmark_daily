@@ -102,6 +102,36 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 {16},
             )
 
+    def test_ttft_test_only_can_inject_one_failed_length(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = self.run_script(
+                "bench_prefill_ttft.sh",
+                "--test-only",
+                temporary_directory,
+                environment={
+                    "BENCHMARK_CONFIG": "dp8",
+                    "TTFT_TEST_ONLY_FAILED_LENGTHS": "258048",
+                    "VENV_DIR": "/missing-test-only-venv",
+                    "MODEL_DIR": "/missing-test-only-model",
+                },
+            )
+            summary_path = (
+                Path(temporary_directory)
+                / "results"
+                / "dp8"
+                / "single_request_ttft"
+                / "summary.json"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "partial")
+            self.assertEqual(summary["failed_input_lengths"], [258048])
+            failed = summary["results"][-1]
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["completed"], 0)
+            self.assertEqual(failed["failed"], 16)
+            self.assertIsNone(failed["ttft_ms"])
+
 
 if __name__ == "__main__":
     unittest.main()

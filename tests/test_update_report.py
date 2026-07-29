@@ -55,7 +55,7 @@ class UpdateReportTest(unittest.TestCase):
         self.assertIn("| -1.00 | — | -1.00 | — | failed |", block)
 
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
-        self.assertEqual(latest["schema_version"], 6)
+        self.assertEqual(latest["schema_version"], 7)
         self.assertEqual(latest["benchmarks"]["dp8"]["status"], "failed")
         self.assertEqual(
             latest["benchmarks"]["dp8"]["total_token_throughput"],
@@ -230,6 +230,7 @@ class UpdateReportTest(unittest.TestCase):
                                 "output_length": 1,
                                 "completed": 1,
                                 "failed": 0,
+                                "status": "success",
                                 "ttft_ms": 1234.5,
                             },
                             {
@@ -238,6 +239,7 @@ class UpdateReportTest(unittest.TestCase):
                                 "output_length": 1,
                                 "completed": 1,
                                 "failed": 0,
+                                "status": "success",
                                 "ttft_ms": 23456.7,
                             },
                         ],
@@ -284,7 +286,93 @@ class UpdateReportTest(unittest.TestCase):
             1234.5,
         )
         csv_report = UPDATE_REPORT.render_prefill_ttft_csv([record])
-        self.assertIn("ttft-run,dp8,success", csv_report)
+        self.assertIn("ttft-run,dp8,success,success", csv_report)
+
+    def test_partial_ttft_renders_failed_cell_and_successful_chart_points(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project_root = Path(temporary_directory)
+            run_dir = project_root / "runs" / "partial-ttft-run"
+            run_dir.mkdir(parents=True)
+            ttft_summary = run_dir / "ttft-summary.json"
+            ttft_summary.write_text(
+                json.dumps(
+                    {
+                        "status": "partial",
+                        "benchmark": {
+                            "benchmark_config": "dp8",
+                            "concurrency": 1,
+                        },
+                        "results": [
+                            {
+                                "label": "8K",
+                                "input_length": 8192,
+                                "output_length": 1,
+                                "completed": 16,
+                                "failed": 0,
+                                "status": "success",
+                                "ttft_ms": 1234.5,
+                            },
+                            {
+                                "label": "252K",
+                                "input_length": 258048,
+                                "output_length": 1,
+                                "completed": 0,
+                                "failed": 16,
+                                "status": "failed",
+                                "ttft_ms": None,
+                                "error": "service unavailable",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            record = UPDATE_REPORT.build_record(
+                project_root=project_root,
+                run_dir=run_dir,
+                summary_path=None,
+                input_length=8192,
+                output_length=1,
+                model="Qwen3.5-397B-A17B-FP8",
+                benchmark_config="dp8",
+                ttft_summary_path=ttft_summary,
+                status="not-run",
+                decode_status="not-run",
+                ttft_status="partial",
+            )
+
+        self.assertEqual(record["prefill_ttft_status"], "partial")
+        self.assertEqual(
+            record["single_request_ttft_results"][1]["status"],
+            "failed",
+        )
+        self.assertIsNone(
+            record["single_request_ttft_results"][1]["ttft_ms"]
+        )
+        series, labels = UPDATE_REPORT.prefill_ttft_chart_data(
+            {"dp8": record}
+        )
+        self.assertEqual(labels, ["8K", "252K"])
+        self.assertEqual(
+            [point["value"] for point in series[0]["points"]],
+            [1234.5],
+        )
+        block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
+        self.assertIn(
+            "Latest DP8 single-request TTFT: **partial**, "
+            "**16 serial samples/length**",
+            block,
+        )
+        self.assertIn("| 8K | 1,234.50 | — |", block)
+        self.assertIn("| 252K | failed | — |", block)
+        csv_report = UPDATE_REPORT.render_prefill_ttft_csv([record])
+        self.assertIn(
+            "partial-ttft-run,dp8,partial,failed",
+            csv_report,
+        )
 
 
 if __name__ == "__main__":

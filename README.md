@@ -32,14 +32,15 @@ Recent DP8 decode throughput over time:
 
 ![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
 
-Latest DP8: **49,738.90 total tok/s** at concurrency **32** (`20260729T233933Z`).
-Latest PCP8: **41,045.98 total tok/s** at concurrency **16** (`20260729T233933Z`).
+Latest DP8: **failed (-1.00 total tok/s)** (`20260730T160002Z`).
+Latest PCP8: **33,403.83 total tok/s** at concurrency **16** (`20260730T160002Z`).
 
-Latest DP8 single-request TTFT: **partial**, **16 serial samples/length** (`20260729T233933Z`).
-Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`20260729T233933Z`).
+Latest DP8 single-request TTFT: **failed** (`20260730T160002Z`).
+Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`20260730T160002Z`).
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `921b1ea4150a` | 2026-07-30 16:00 | -1.00 | 33,403.83 | -1.00 | — | failed | failed | 1,048.42 | failed | 1,086.03 | failed | 1,215.65 | failed | 2,572.88 | failed | 5,655.40 | failed | 13,149.07 |
 | `275c91100d72` | 2026-07-29 23:39 | 49,738.90 | 41,045.98 | 4,159.53 | 49.86 | C256 peak-active P50 | 1,475.38 | 811.06 | 3,012.23 | 863.67 | 6,269.43 | 1,031.42 | 13,531.77 | 2,202.86 | 31,011.83 | 4,920.10 | failed | 11,673.99 |
 | `386bfd1e937c` | 2026-07-29 08:17 | 50,400.07 | 40,987.73 | 3,943.67 | 46.63 | C256 peak-active P50 | 1,472.80 | 811.51 | 3,006.12 | 859.79 | 6,262.75 | 1,028.81 | 13,515.36 | 2,197.16 | 31,005.05 | 4,914.47 | failed | 11,727.55 |
 | `bd7bad876f71` | 2026-07-28 23:30 | -1.00 | 41,006.13 | 3,937.70 | 46.67 | C256 peak-active P50 | — | — | — | — | — | — | — | — | — | — | — | — |
@@ -49,7 +50,6 @@ Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`202
 | `13a63bd52a50` | 2026-07-28 07:09 | — | -1.00 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 | `13a63bd52a50` | 2026-07-28 06:33 | 44,300.90 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 | `13a63bd52a50` | 2026-07-28 06:29 | — | -1.00 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
-| `13a63bd52a50` | 2026-07-28 06:24 | -1.00 | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
@@ -63,11 +63,14 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 - `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
   C256 decode service with unified pool, auto-derived block size, GMU
   0.932285943, async scheduling, GDN v3, prefix cache disabled, and the same
-  compile shapes as the current standalone C256 test.
+  compile shapes as the current standalone C256 test；服务由
+  `vllm-service-launch` 以 `role=decode` 托管。
 - `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server
-  with unified pool and an auto-derived block size.
+  with unified pool and an auto-derived block size；服务由
+  `vllm-service-launch` 以 `role=prefill` 托管。
 - `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server
-  with unified pool and an auto-derived block size.
+  with unified pool and an auto-derived block size；服务由
+  `vllm-service-launch` 以 `role=prefill` 托管。
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
@@ -81,14 +84,23 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 
 ## First preparation
 
-The machine needs `git`, `uv`, the Google Cloud CLI, and Python 3.12. SSH access
-to GitHub is required for the `vllm-torchtpu` submodule. The active gcloud user
-must have read access to the private `torch-tpu` Artifact Registry. Authenticate
-that user before the first run:
+机器需要安装 `git`、`uv`、Google Cloud CLI、Python 3.12，以及
+`vllm-service-launch` 和对应的 systemd service。拉取 `vllm-torchtpu`
+submodule 需要 GitHub SSH 权限；当前 gcloud 用户必须具有私有 `torch-tpu`
+Artifact Registry 的读取权限。首次运行前先完成认证：
 
 ```bash
 gcloud auth login
 gcloud auth list --filter=status:ACTIVE
+```
+
+在 benchmark 主机安装 launcher：
+
+```bash
+sudo /path/to/tpu-misc/pd_disagg/observability/install.sh
+sudo systemd-tmpfiles --create vllm-metrics-targets.conf
+sudo systemctl daemon-reload
+vllm-service-launch --help
 ```
 
 完整 daily run 要求 `models/Qwen3.5-397B-A17B-FP8` 中存在真实模型权重。
@@ -184,10 +196,10 @@ is counted as a failure in the final process status after reports are published.
 With
 `--keep-server-running`, the server for a fully successful selective run is kept.
 
-Before updating or building, the full workflow stops an existing vLLM API
-server listening on `PORT` (18100 by default), including its worker process
-group. A non-vLLM process on that port is never killed and causes the job to
-fail safely. `--prepare-only` leaves any running service untouched.
+更新或构建前，完整工作流会按稳定的 launcher service ID 停止上一次残留的
+daily benchmark 服务。若其他进程占用 `PORT`（默认 18100），工作流不会主动
+终止该进程，而是让 launcher 安全地返回启动失败。`--prepare-only` 不会修改
+任何运行中的服务。
 
 The runner first starts the real-weight DP8 C256 decode service, runs one
 C8/P65536/D32 smoke process followed by three independent

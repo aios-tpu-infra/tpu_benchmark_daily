@@ -9,16 +9,21 @@ VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
 TORCH_TPU_INDEX_URL="${TORCH_TPU_INDEX_URL:-https://us-python.pkg.dev/ml-oss-artifacts-transient/torch-tpu-virtual-registry/simple/}"
 UPDATE_SOURCE=1
+SOURCE_COMMIT=
+SOURCE_COMMIT_SPECIFIED=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/update_environment.sh [--no-source-update]
+Usage: scripts/update_environment.sh [--no-source-update] [--commit COMMIT]
 
-Updates vllm-torchtpu to origin/main, reads its exact compatible torch and
-torch-tpu pins, installs both from Google Artifact Registry with pip, and
-synchronizes the project-local .venv.
+Updates vllm-torchtpu to the requested commit (or latest origin/main by
+default), reads its exact compatible torch and torch-tpu pins, installs both
+from Google Artifact Registry with pip, and synchronizes the project-local
+.venv.
 
   --no-source-update  Install using the vllm-torchtpu revision already checked out.
+  --commit COMMIT     Check out this exact vllm-torchtpu Git commit. The value
+                      must be a 7- to 40-character hexadecimal commit ID.
 EOF
 }
 
@@ -26,6 +31,20 @@ while (( $# > 0 )); do
   case "$1" in
     --no-source-update)
       UPDATE_SOURCE=0
+      ;;
+    --commit)
+      if (( $# < 2 )); then
+        echo "ERROR: --commit requires a Git commit." >&2
+        usage >&2
+        exit 2
+      fi
+      SOURCE_COMMIT=$2
+      SOURCE_COMMIT_SPECIFIED=1
+      shift
+      ;;
+    --commit=*)
+      SOURCE_COMMIT=${1#*=}
+      SOURCE_COMMIT_SPECIFIED=1
       ;;
     -h|--help)
       usage
@@ -39,6 +58,16 @@ while (( $# > 0 )); do
   esac
   shift
 done
+
+if (( ! UPDATE_SOURCE )) && [[ -n "$SOURCE_COMMIT" ]]; then
+  echo "ERROR: --commit and --no-source-update cannot be used together." >&2
+  exit 2
+fi
+if (( SOURCE_COMMIT_SPECIFIED )) &&
+    [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+  echo "ERROR: --commit must be a 7- to 40-character hexadecimal Git commit ID." >&2
+  exit 2
+fi
 
 if [[ -n "${UV_BIN:-}" ]]; then
   UV=$UV_BIN
@@ -76,6 +105,38 @@ update_main() {
   git -C "$path" checkout --detach "$target_revision"
 }
 
+checkout_commit() {
+  local name=$1
+  local path=$2
+  local requested_commit=$3
+  local target_revision
+
+  ensure_clean "$name" "$path"
+  echo "Selecting requested $name commit: $requested_commit"
+
+  if target_revision=$(
+    git -C "$path" rev-parse --verify --quiet "${requested_commit}^{commit}"
+  ); then
+    echo "Requested commit is already available locally."
+  else
+    echo "Fetching requested $name commit from origin..."
+    if ! git -C "$path" fetch --no-tags --depth 1 origin "$requested_commit"; then
+      echo "ERROR: could not fetch $name commit '$requested_commit'." >&2
+      echo "Use the full 40-character commit ID if a short ID is not available locally." >&2
+      exit 1
+    fi
+    target_revision=$(
+      git -C "$path" rev-parse --verify --quiet "FETCH_HEAD^{commit}"
+    ) || {
+      echo "ERROR: fetched '$requested_commit' is not a Git commit." >&2
+      exit 1
+    }
+  fi
+
+  git -C "$path" checkout --detach "$target_revision"
+  echo "Resolved requested $name commit: $target_revision"
+}
+
 if (( UPDATE_SOURCE )); then
   # Check an initialized repository before submodule update so local work is
   # not hidden by a checkout attempt.
@@ -85,7 +146,11 @@ if (( UPDATE_SOURCE )); then
 
   git -C "$PROJECT_ROOT" submodule update --init --depth 1 -- \
     third_party/torchtpu-vllm
-  update_main "vllm-torchtpu" "$TORCHTPU_DIR"
+  if [[ -n "$SOURCE_COMMIT" ]]; then
+    checkout_commit "vllm-torchtpu" "$TORCHTPU_DIR" "$SOURCE_COMMIT"
+  else
+    update_main "vllm-torchtpu" "$TORCHTPU_DIR"
+  fi
 fi
 
 if ! git -C "$TORCHTPU_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then

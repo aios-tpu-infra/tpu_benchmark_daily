@@ -14,7 +14,6 @@ PORT="${PORT:-18100}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-66560}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4384}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
-BLOCK_SIZE="${BLOCK_SIZE:-4352}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.932285943}"
 COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4352,4384}"
 
@@ -27,8 +26,7 @@ require_uint() {
   fi
 }
 
-for value_name in \
-  PORT MAX_MODEL_LEN MAX_NUM_BATCHED_TOKENS MAX_NUM_SEQS BLOCK_SIZE; do
+for value_name in PORT MAX_MODEL_LEN MAX_NUM_BATCHED_TOKENS MAX_NUM_SEQS; do
   require_uint "$value_name" "${!value_name}"
 done
 if [[ ! "$GPU_MEMORY_UTILIZATION" =~ ^0\.[0-9]+$ ]]; then
@@ -58,7 +56,7 @@ TORCH_TPU_VERSION=$(
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
 CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_c256_dp8_tp1"
 CACHE_KEY+="_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}"
-CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
+CACHE_KEY+="_mns${MAX_NUM_SEQS}_gmu${GPU_MEMORY_UTILIZATION}"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
 
 export PYTHONPATH="$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -214,6 +212,7 @@ echo "compile cache:           $COMPILE_CACHE_ROOT (cleared before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path:  $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache:   disabled (no /dev/shm dependency)"
+echo "unified block pool:      enabled (block size auto-derived)"
 
 exec "$VENV_DIR/bin/python" \
   -m vllm.entrypoints.openai.api_server \
@@ -241,7 +240,6 @@ exec "$VENV_DIR/bin/python" \
   --no-enable-log-requests \
   --no-enable-prefix-caching \
   --attention-backend CUSTOM \
-  --block-size "$BLOCK_SIZE" \
   --limit-mm-per-prompt '{"image":0,"video":0}' \
   --compilation-config "$COMPILATION_CONFIG" \
   "$@"

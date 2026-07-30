@@ -96,7 +96,7 @@ export SKIP_JAX_PRECOMPILE=1
 export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
 export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
 export RAY_memory_monitor_refresh_ms=0
-export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=0
+export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
 
 # Keep every configurable compilation cache on project storage and start each
@@ -225,6 +225,7 @@ echo "compile cache: $COMPILE_CACHE_ROOT (cleared before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
+echo "unified block pool: enabled (block size auto-derived)"
 
 exec "$VENV_DIR/bin/python" \
   -m vllm.entrypoints.openai.api_server \
@@ -239,7 +240,6 @@ exec "$VENV_DIR/bin/python" \
   --max-num-seqs "$MAX_NUM_SEQS" \
   --data-parallel-size 8 \
   --attention-backend CUSTOM \
-  --block-size 256 \
   --gpu-memory-utilization 0.90 \
   --kv-cache-dtype fp8 \
   --language-model-only \

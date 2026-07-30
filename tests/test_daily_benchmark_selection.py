@@ -26,6 +26,8 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("dp-prefill", result.stdout)
         self.assertIn("pcp-prefill", result.stdout)
         self.assertIn("--test-only", result.stdout)
+        self.assertIn("--commit COMMIT", result.stdout)
+        self.assertIn("--torchtpu-commit is an alias", result.stdout)
 
     def test_only_requires_a_value(self) -> None:
         result = self.run_cli("--only")
@@ -38,6 +40,34 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid --only benchmark 'unknown'", result.stderr)
+
+    def test_commit_requires_a_value(self) -> None:
+        result = self.run_cli("--commit")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--commit requires a Git commit", result.stderr)
+
+    def test_commit_rejects_test_only_mode(self) -> None:
+        result = self.run_cli(
+            "--test-only",
+            "--commit",
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--commit cannot be used with --test-only", result.stderr)
+
+    def test_commit_must_be_hexadecimal(self) -> None:
+        result = self.run_cli("--commit", "main")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("hexadecimal Git commit ID", result.stderr)
+
+    def test_empty_commit_is_rejected(self) -> None:
+        result = self.run_cli("--commit=")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("hexadecimal Git commit ID", result.stderr)
 
     def test_test_only_rejects_decode_only_selection(self) -> None:
         result = self.run_cli("--test-only", "--only", "dp-decode")
@@ -80,6 +110,18 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("TEST_ONLY=1 UPDATE_REPORTS=0", script)
         self.assertIn('"$SCRIPT_DIR/bench_prefill_ttft.sh"', script)
         self.assertIn("TEST_ONLY preview README", script)
+
+    def test_requested_commit_is_forwarded_to_environment_update(self) -> None:
+        script = DAILY_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn(
+            'environment_update_args+=(--commit "$TORCHTPU_COMMIT")',
+            script,
+        )
+        self.assertIn(
+            '"$SCRIPT_DIR/update_environment.sh" "${environment_update_args[@]}"',
+            script,
+        )
 
 
 if __name__ == "__main__":

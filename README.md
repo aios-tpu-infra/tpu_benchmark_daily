@@ -70,11 +70,13 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 - `models/`: offline model metadata and locally provisioned checkpoint weights;
   checkpoint files are excluded from Git.
 - `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
-  C256 decode service with unified pool, 4352-token pages, GMU 0.932285943, async
-  scheduling, GDN v3, prefix cache disabled, and the same compile shapes as
-  the current standalone C256 test.
-- `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server.
-- `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server.
+  C256 decode service with unified pool, auto-derived block size, GMU
+  0.932285943, async scheduling, GDN v3, prefix cache disabled, and the same
+  compile shapes as the current standalone C256 test.
+- `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server
+  with unified pool and an auto-derived block size.
+- `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server
+  with unified pool and an auto-derived block size.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
@@ -127,6 +129,20 @@ The remaining dependencies are then synchronized with `uv`.
 ```bash
 scripts/daily_benchmark.sh
 ```
+
+By default the runner tests the latest commit on `vllm-torchtpu/main`. To test
+an exact commit instead, pass its Git commit ID:
+
+```bash
+scripts/daily_benchmark.sh --commit 0123456789abcdef0123456789abcdef01234567
+```
+
+`--commit` works with full runs, `--prepare-only`, and `--only`. A full
+40-character commit ID is recommended; a 7–40 character short ID also works
+when Git can resolve it locally or fetch it from the remote. The selected exact
+revision is recorded in `run_metadata.json` and the generated report as usual.
+Omitting `--commit` preserves the scheduled-job behavior of fetching the latest
+`origin/main`.
 
 To run only one benchmark group, use `--only`:
 

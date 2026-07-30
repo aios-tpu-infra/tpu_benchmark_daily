@@ -17,6 +17,8 @@ MACHINE_IP="${MACHINE_IP:-}"
 PREPARE_ONLY=0
 TEST_ONLY=0
 BENCHMARK_SELECTION=all
+TORCHTPU_COMMIT=
+TORCHTPU_COMMIT_SPECIFIED=0
 RUN_DP_DECODE=0
 RUN_DP_PREFILL=0
 RUN_PCP_PREFILL=0
@@ -50,6 +52,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/daily_benchmark.sh [--prepare-only] [--test-only]
                                   [--keep-server-running]
+                                  [--commit COMMIT]
                                   [--only BENCHMARK]
 
   --prepare-only         Prepare source/environment without touching a server.
@@ -57,11 +60,14 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--test-only]
                          do not update the environment, start a server, send
                          benchmark requests, publish, or modify durable reports.
   --keep-server-running  Keep a successfully benchmarked server alive.
+  --commit COMMIT        Test this exact vllm-torchtpu Git commit instead of the
+                         latest origin/main commit. --torchtpu-commit is an alias.
   --only BENCHMARK       Run only one benchmark group. BENCHMARK must be one of:
                          dp-decode, dp-prefill, or pcp-prefill.
 
 The default full workflow stops an existing vLLM service on PORT, updates
-vllm-torchtpu/main, installs its compatible torch_tpu version with pip, updates
+to the requested vllm-torchtpu commit (or latest main by default), installs its
+compatible torch_tpu version with pip, updates
 .venv, then runs real-weight C256 DP8 decode, DP8 prefill, and PCP8 prefill
 services. Benchmark groups are independent: a failed group is recorded as
 -1 tok/s and does not prevent later groups from running. Reports are generated
@@ -81,6 +87,20 @@ while (( $# > 0 )); do
       ;;
     --keep-server-running)
       KEEP_SERVER_RUNNING=1
+      ;;
+    --commit|--torchtpu-commit)
+      if (( $# < 2 )); then
+        echo "ERROR: $1 requires a Git commit." >&2
+        usage >&2
+        exit 2
+      fi
+      TORCHTPU_COMMIT=$2
+      TORCHTPU_COMMIT_SPECIFIED=1
+      shift
+      ;;
+    --commit=*|--torchtpu-commit=*)
+      TORCHTPU_COMMIT=${1#*=}
+      TORCHTPU_COMMIT_SPECIFIED=1
       ;;
     --only)
       if (( $# < 2 )); then
@@ -149,8 +169,17 @@ if [[ "$PUBLISH_REPORTS" != 0 && "$PUBLISH_REPORTS" != 1 ]]; then
   echo "ERROR: PUBLISH_REPORTS must be 0 or 1." >&2
   exit 2
 fi
+if (( TORCHTPU_COMMIT_SPECIFIED )) &&
+    [[ ! "$TORCHTPU_COMMIT" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+  echo "ERROR: --commit must be a 7- to 40-character hexadecimal Git commit ID." >&2
+  exit 2
+fi
 if (( TEST_ONLY && PREPARE_ONLY )); then
   echo "ERROR: --test-only and --prepare-only cannot be used together." >&2
+  exit 2
+fi
+if (( TEST_ONLY )) && [[ -n "$TORCHTPU_COMMIT" ]]; then
+  echo "ERROR: --commit cannot be used with --test-only because test-only does not update source." >&2
   exit 2
 fi
 if (( TEST_ONLY && RUN_DP_DECODE && ! RUN_DP_PREFILL && ! RUN_PCP_PREFILL )); then
@@ -425,6 +454,11 @@ echo "Project root: $PROJECT_ROOT"
 echo "Run directory: $RUN_DIR"
 echo "Machine IP: $MACHINE_IP"
 echo "Benchmark selection: $BENCHMARK_SELECTION"
+if [[ -n "$TORCHTPU_COMMIT" ]]; then
+  echo "Requested vllm-torchtpu commit: $TORCHTPU_COMMIT"
+else
+  echo "Requested vllm-torchtpu source: latest origin/main"
+fi
 
 if (( TEST_ONLY )); then
   echo "TEST_ONLY: building an isolated fixture-backed report preview."
@@ -508,7 +542,11 @@ if (( ! PREPARE_ONLY )); then
   stop_existing_server
 fi
 
-"$SCRIPT_DIR/update_environment.sh"
+environment_update_args=()
+if [[ -n "$TORCHTPU_COMMIT" ]]; then
+  environment_update_args+=(--commit "$TORCHTPU_COMMIT")
+fi
+"$SCRIPT_DIR/update_environment.sh" "${environment_update_args[@]}"
 
 source_revision=$(git -C "$TORCHTPU_DIR" rev-parse HEAD)
 torch_tpu_version=$(

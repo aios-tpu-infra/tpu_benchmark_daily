@@ -49,6 +49,22 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 )
                 self.assertIn("max model length:        262144", result.stdout)
 
+    def test_all_server_configs_use_auto_sized_unified_pool(self) -> None:
+        for script_name in (
+            "start_dp_decode_server.sh",
+            "start_dp_server.sh",
+            "start_pcp_server.sh",
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    "export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1",
+                    script,
+                )
+                self.assertNotIn("--block-size", script)
+
     def test_throughput_test_only_accepts_flag_before_run_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = self.run_script(

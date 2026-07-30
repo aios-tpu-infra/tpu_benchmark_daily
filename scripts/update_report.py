@@ -1356,37 +1356,42 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     ttft_lengths = sorted(
         {
             int(result["input_length"])
-            for run in latest_ttft.values()
+            for run in runs
             for result in run.get("single_request_ttft_results", [])
         }
     )
     ttft_labels = {
         int(result["input_length"]): str(result["label"])
-        for run in latest_ttft.values()
-        for result in run.get("single_request_ttft_results", [])
-    }
-    ttft_results_by_cell = {
-        (
-            run["benchmark_config"],
-            int(result["input_length"]),
-        ): result
-        for run in latest_ttft.values()
+        for run in runs
         for result in run.get("single_request_ttft_results", [])
     }
 
-    def ttft_cell(config: str, input_length: int) -> str:
-        result = ttft_results_by_cell.get((config, input_length))
+    def ttft_cell(run: dict[str, Any] | None, input_length: int) -> str:
+        if run is None:
+            return "—"
+        result = next(
+            (
+                item
+                for item in run.get("single_request_ttft_results", [])
+                if int(item["input_length"]) == input_length
+            ),
+            None,
+        )
         if result is None:
+            if run.get("prefill_ttft_status") == "failed":
+                return "failed"
             return "—"
         if result.get("status", "success") == "failed":
             return "failed"
         return table_metric(result.get("ttft_ms"))
 
-    ttft_rows = [
-        f"| {ttft_labels.get(input_length, input_length)} | "
-        f"{ttft_cell('dp8', input_length)} | "
-        f"{ttft_cell('pcp8', input_length)} |"
+    ttft_headers = [
+        header
         for input_length in ttft_lengths
+        for header in (
+            f"DP TTFT {ttft_labels.get(input_length, input_length)} (ms)",
+            f"PCP TTFT {ttft_labels.get(input_length, input_length)} (ms)",
+        )
     ]
     rows = []
     for grouped_run in report_table_runs(runs, table_limit):
@@ -1423,15 +1428,44 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             decode_protocol = "legacy peak/min"
         else:
             decode_protocol = "—"
-        rows.append(
-            f"| {revision_display} | "
-            f"{display_time(grouped_run['started_at'])} | "
-            f"{table_metric(dp_prefill)} | "
-            f"{table_metric(pcp_prefill)} | "
-            f"{table_metric(dp_decode)} | "
-            f"{table_metric(dp_tpot_p50)} | "
-            f"{decode_protocol} |"
-        )
+        cells = [
+            revision_display,
+            display_time(grouped_run["started_at"]),
+            table_metric(dp_prefill),
+            table_metric(pcp_prefill),
+            table_metric(dp_decode),
+            table_metric(dp_tpot_p50),
+            decode_protocol,
+        ]
+        for input_length in ttft_lengths:
+            cells.extend(
+                (
+                    ttft_cell(dp_run, input_length),
+                    ttft_cell(pcp_run, input_length),
+                )
+            )
+        rows.append(f"| {' | '.join(cells)} |")
+
+    history_headers = [
+        "vllm-torchtpu commit",
+        "Test time (UTC)",
+        "DP peak prefill tok/s",
+        "PCP peak prefill tok/s",
+        "DP decode tok/s",
+        "DP decode TPOT (ms)",
+        "Decode protocol",
+        *ttft_headers,
+    ]
+    history_alignment = [
+        "---",
+        "---",
+        "---:",
+        "---:",
+        "---:",
+        "---:",
+        "---",
+        *(["---:"] * len(ttft_headers)),
+    ]
 
     return "\n".join(
         [
@@ -1460,22 +1494,18 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "",
             *ttft_status_lines,
             "",
-            "| Input length | DP8 TTFT (ms) | PCP8 TTFT (ms) |",
-            "|---:|---:|---:|",
-            *ttft_rows,
-            "",
-            "| vllm-torchtpu commit | Test time (UTC) | "
-            "DP peak prefill tok/s | PCP peak prefill tok/s | "
-            "DP decode tok/s | DP decode TPOT (ms) | Decode protocol |",
-            "|---|---|---:|---:|---:|---:|---|",
+            f"| {' | '.join(history_headers)} |",
+            f"| {' | '.join(history_alignment)} |",
             *rows,
             "",
             "Failed benchmark groups are recorded as -1 tok/s in the table and "
             "JSON/CSV reports, while charts plot successful measurements only. "
             "The prefill charts compare DP8 and PCP8 throughput and track their "
-            "recent peaks. The single-request TTFT chart uses concurrency 1, "
-            "runs requests serially, and plots median latency to the first "
-            "generated token across the completed samples. "
+            "recent peaks. The combined history table records each run's "
+            "throughput and per-length median TTFT; missing measurements are "
+            "shown as — and failed lengths as failed. The single-request TTFT "
+            "chart uses concurrency 1, runs requests serially, and plots median "
+            "latency to the first generated token across the completed samples. "
             "The decode chart keeps "
             "legacy peak-output and current peak-active P50 statistics in "
             "separate series; see "

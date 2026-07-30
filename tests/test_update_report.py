@@ -277,7 +277,10 @@ class UpdateReportTest(unittest.TestCase):
         block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
         self.assertIn("reports/prefill_ttft.svg", block)
         self.assertIn("1 serial sample/length", block)
-        self.assertIn("| 252K | 23,456.70 | — |", block)
+        self.assertIn("DP TTFT 8K (ms)", block)
+        self.assertIn("PCP TTFT 252K (ms)", block)
+        self.assertNotIn("| Input length | DP8 TTFT", block)
+        self.assertIn("| 1,234.50 | — | 23,456.70 | — |", block)
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
         self.assertEqual(
             latest["benchmarks"]["dp8"]["single_request_ttft_results"][0][
@@ -366,12 +369,87 @@ class UpdateReportTest(unittest.TestCase):
             "**16 serial samples/length**",
             block,
         )
-        self.assertIn("| 8K | 1,234.50 | — |", block)
-        self.assertIn("| 252K | failed | — |", block)
+        self.assertIn("| 1,234.50 | — | failed | — |", block)
         csv_report = UPDATE_REPORT.render_prefill_ttft_csv([record])
         self.assertIn(
             "partial-ttft-run,dp8,partial,failed",
             csv_report,
+        )
+
+    def test_history_table_combines_dp_and_pcp_ttft_by_run(self) -> None:
+        def record(
+            *,
+            run_id: str,
+            config: str,
+            revision: str,
+            throughput: float,
+            ttft_ms: float | None,
+            ttft_status: str = "success",
+        ) -> dict[str, object]:
+            ttft_result = {
+                "label": "8K",
+                "input_length": 8192,
+                "output_length": 1,
+                "completed": 16 if ttft_ms is not None else 0,
+                "failed": 0 if ttft_ms is not None else 16,
+                "status": "success" if ttft_ms is not None else "failed",
+                "ttft_ms": ttft_ms,
+            }
+            return {
+                "run_id": run_id,
+                "benchmark_config": config,
+                "status": "success",
+                "decode_status": "not-run",
+                "started_at": f"2026-07-{30 if run_id == 'new' else 29}T00:00:00+00:00",
+                "completed_at": f"2026-07-{30 if run_id == 'new' else 29}T01:00:00+00:00",
+                "best_total_token_throughput": throughput,
+                "best_concurrency": 16,
+                "decode_window_p50_throughput": None,
+                "decode_peak_active_tpot_p50_ms": None,
+                UPDATE_REPORT.LEGACY_DECODE_THROUGHPUT_FIELD: None,
+                UPDATE_REPORT.LEGACY_DECODE_TPOT_FIELD: None,
+                "prefill_ttft_status": ttft_status,
+                "single_request_ttft_results": [ttft_result],
+                "torchtpu_vllm_revision": revision,
+            }
+
+        runs = [
+            record(
+                run_id="old",
+                config="dp8",
+                revision="oldrevision",
+                throughput=49000.0,
+                ttft_ms=None,
+                ttft_status="failed",
+            ),
+            record(
+                run_id="new",
+                config="dp8",
+                revision="newrevision",
+                throughput=50000.0,
+                ttft_ms=1500.0,
+            ),
+            record(
+                run_id="new",
+                config="pcp8",
+                revision="newrevision",
+                throughput=41000.0,
+                ttft_ms=800.0,
+            ),
+        ]
+
+        block = UPDATE_REPORT.render_readme_block(runs, table_limit=10)
+
+        self.assertIn("DP TTFT 8K (ms) | PCP TTFT 8K (ms)", block)
+        self.assertIn(
+            "| `newrevision` | 2026-07-30 00:00 | "
+            "50,000.00 | 41,000.00 | — | — | — | 1,500.00 | 800.00 |",
+            block,
+        )
+        self.assertIn(
+            "| `oldrevision` | 2026-07-29 00:00 | "
+            "49,000.00 | — | — | — | — | failed | — |",
+            block,
         )
 
 

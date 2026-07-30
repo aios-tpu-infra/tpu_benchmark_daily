@@ -4,6 +4,7 @@ set -Eeuo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
+source "$SCRIPT_DIR/launcher_env.sh"
 
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
@@ -11,6 +12,9 @@ MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
+SERVICE_ID=tpu-daily-dp8-prefill
+ROLE=prefill
+LAUNCH_ENV_FILE="${LAUNCH_ENV_FILE:-$PROJECT_ROOT/.state/launcher/$SERVICE_ID.env}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
@@ -199,9 +203,11 @@ PROFILE_DELAY_ITERATIONS="${PROFILE_DELAY_ITERATIONS:-0}"
 PROFILE_MAX_ITERATIONS="${PROFILE_MAX_ITERATIONS:-0}"
 
 profile_args=()
+profile_env_keys=()
 if [[ -n "$PROFILE_DIR" ]]; then
   mkdir -p "$PROFILE_DIR"
   export VLLM_TORCH_PROFILER_DIR="$PROFILE_DIR"
+  profile_env_keys+=(VLLM_TORCH_PROFILER_DIR)
   profile_args=(
     --profiler-config.profiler torch
     --profiler-config.torch_profiler_dir "$VLLM_TORCH_PROFILER_DIR"
@@ -227,11 +233,45 @@ echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
 echo "unified block pool: enabled (block size auto-derived)"
 
-exec "$VENV_DIR/bin/python" \
-  -m vllm.entrypoints.openai.api_server \
+write_launcher_env "$LAUNCH_ENV_FILE" \
+  PJRT_DEVICE \
+  VLLM_TARGET_DEVICE \
+  VLLM_PLUGINS \
+  PYTHONPATH \
+  HF_HUB_OFFLINE \
+  TRANSFORMERS_OFFLINE \
+  HF_DATASETS_OFFLINE \
+  SKIP_JAX_PRECOMPILE \
+  VLLM_DISABLE_COMPILE_CACHE \
+  TORCHINDUCTOR_AUTOGRAD_CACHE \
+  RAY_memory_monitor_refresh_ms \
+  TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL \
+  TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG \
+  VLLM_CACHE_ROOT \
+  VLLM_XLA_CACHE_PATH \
+  TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE \
+  TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT \
+  TORCHINDUCTOR_CACHE_DIR \
+  XDG_CACHE_HOME \
+  TMPDIR \
+  TMP \
+  TEMP \
+  VLLM_XLA_CHECK_RECOMPILATION \
+  PYTHONUNBUFFERED \
+  "${profile_env_keys[@]}"
+
+ensure_uv_on_path
+
+exec vllm-service-launch start \
+  --service-id "$SERVICE_ID" \
+  --role "$ROLE" \
+  --model-alias "$SERVED_MODEL_NAME" \
+  --uv-project "$PROJECT_ROOT" \
+  --env-file "$LAUNCH_ENV_FILE" \
+  --working-directory "$PROJECT_ROOT" \
   --host "$HOST" \
   --port "$PORT" \
-  --model "$MODEL_DIR" \
+  -- serve "$MODEL_DIR" \
   --served-model-name "$SERVED_MODEL_NAME" \
   --generation-config vllm \
   --seed 42 \

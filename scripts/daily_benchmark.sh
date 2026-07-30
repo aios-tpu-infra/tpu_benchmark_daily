@@ -10,10 +10,12 @@ TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
-SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-60}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
+DP_DECODE_SERVICE_ID=tpu-daily-dp8-decode-c256
+DP_PREFILL_SERVICE_ID=tpu-daily-dp8-prefill
+PCP_PREFILL_SERVICE_ID=tpu-daily-pcp8-prefill
 PREPARE_ONLY=0
 TEST_ONLY=0
 BENCHMARK_SELECTION=all
@@ -154,7 +156,7 @@ case "$BENCHMARK_SELECTION" in
 esac
 RUN_PREFILL=$(( RUN_DP_PREFILL || RUN_PCP_PREFILL ))
 
-for value_name in PORT SERVER_READY_TIMEOUT SERVER_STOP_TIMEOUT; do
+for value_name in PORT SERVER_READY_TIMEOUT; do
   value=${!value_name}
   if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value == 0 )); then
     echo "ERROR: $value_name must be a positive integer, got '$value'." >&2
@@ -237,201 +239,6 @@ try:
 except ValueError as error:
     raise SystemExit(f"ERROR: MACHINE_IP is not a valid IP address: {error}")
 PY
-
-list_port_listener_pids() {
-  if command -v lsof >/dev/null 2>&1; then
-    { lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true; } |
-      sort -nu
-    return
-  fi
-
-  if command -v ss >/dev/null 2>&1; then
-    { ss -H -ltnp "sport = :$PORT" 2>/dev/null || true; } |
-      grep -oE 'pid=[0-9]+' |
-      cut -d= -f2 |
-      sort -nu || true
-    return
-  fi
-
-  if command -v fuser >/dev/null 2>&1; then
-    { fuser -n tcp "$PORT" 2>/dev/null || true; } |
-      tr ' ' '\n' |
-      awk '/^[0-9]+$/' |
-      sort -nu
-    return
-  fi
-
-  echo "ERROR: lsof, ss, or fuser is required to inspect port $PORT." >&2
-  return 1
-}
-
-is_vllm_server_process() {
-  local pid=$1
-  local command_line
-
-  command_line=$(tr '\0' ' ' 2>/dev/null < "/proc/$pid/cmdline" || true)
-  [[ "$command_line" == *"vllm.entrypoints.openai.api_server"* ]] ||
-    [[ "$command_line" == *"vllm.entrypoints.cli.main"*" serve "* ]] ||
-    [[ "$command_line" == *"vllm serve "* ]] ||
-    [[ "$command_line" == *"VLLM::APIServer"* ]]
-}
-
-list_process_tree_pids() {
-  local parent=$1
-  local child
-
-  printf '%s\n' "$parent"
-  while IFS= read -r child; do
-    [[ -n "$child" ]] || continue
-    list_process_tree_pids "$child"
-  done < <(pgrep -P "$parent" 2>/dev/null || true)
-}
-
-process_group_has_live_members() {
-  local target_pgid=$1
-
-  ps -e -o pgid=,stat= | awk -v target="$target_pgid" '
-    $1 == target && $2 !~ /^Z/ { found = 1 }
-    END { exit(found ? 0 : 1) }
-  '
-}
-
-process_is_live() {
-  local pid=$1
-  local state
-
-  state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
-  [[ -n "$state" && "$state" != Z* ]]
-}
-
-stop_existing_server() {
-  local current_pgid
-  local pid
-  local pgid
-  local waited
-  local tree_pid
-  local targets_running
-  local -a listener_pids=()
-  local -a remaining=()
-  local -A target_groups=()
-  local -A target_pids=()
-
-  mapfile -t listener_pids < <(list_port_listener_pids)
-  if (( ${#listener_pids[@]} == 0 )); then
-    if command -v ss >/dev/null 2>&1 &&
-        ss -H -ltn "sport = :$PORT" 2>/dev/null | grep -q .; then
-      echo "ERROR: port $PORT is occupied, but its listener PID is not visible." >&2
-      return 1
-    fi
-    echo "No existing service is listening on port $PORT."
-    return
-  fi
-
-  # Validate every listener before sending any signal. A non-vLLM listener is
-  # treated as a port conflict instead of being killed.
-  for pid in "${listener_pids[@]}"; do
-    if [[ ! -e "/proc/$pid" ]]; then
-      continue
-    fi
-    if [[ ! -r "/proc/$pid/cmdline" ]]; then
-      echo "ERROR: cannot inspect the process listening on port $PORT (PID $pid)." >&2
-      return 1
-    fi
-    if ! is_vllm_server_process "$pid"; then
-      echo "ERROR: port $PORT is owned by a non-vLLM process; refusing to stop it." >&2
-      ps -ww -o pid,ppid,pgid,args -p "$pid" >&2 || true
-      return 1
-    fi
-  done
-
-  current_pgid=$(ps -o pgid= -p $$ | tr -d '[:space:]')
-  for pid in "${listener_pids[@]}"; do
-    [[ -r "/proc/$pid/stat" ]] || continue
-    pgid=$(ps -o pgid= -p "$pid" | tr -d '[:space:]')
-    if [[ ! "$pgid" =~ ^[0-9]+$ ]] || (( pgid <= 1 )); then
-      echo "ERROR: could not determine a safe process group for PID $pid." >&2
-      return 1
-    fi
-
-    if [[ "$pgid" == "$current_pgid" ]]; then
-      # This can happen when a server was backgrounded from the same shell.
-      # Signal its process tree so the benchmark runner does not kill itself.
-      while IFS= read -r tree_pid; do
-        [[ -n "$tree_pid" ]] && target_pids[$tree_pid]=1
-      done < <(list_process_tree_pids "$pid")
-    else
-      target_groups[$pgid]=1
-    fi
-    echo "Found existing vLLM service: PID $pid, process group $pgid, port $PORT."
-  done
-
-  echo "Stopping the existing vLLM service..."
-  for pgid in "${!target_groups[@]}"; do
-    kill -TERM -- "-$pgid" 2>/dev/null || true
-  done
-  for pid in "${!target_pids[@]}"; do
-    kill -TERM -- "$pid" 2>/dev/null || true
-  done
-
-  for (( waited = 0; waited < SERVER_STOP_TIMEOUT; waited++ )); do
-    mapfile -t remaining < <(list_port_listener_pids)
-    targets_running=0
-    for pgid in "${!target_groups[@]}"; do
-      if process_group_has_live_members "$pgid"; then
-        targets_running=1
-        break
-      fi
-    done
-    if (( ! targets_running )); then
-      for pid in "${!target_pids[@]}"; do
-        if process_is_live "$pid"; then
-          targets_running=1
-          break
-        fi
-      done
-    fi
-    if (( ${#remaining[@]} == 0 && ! targets_running )); then
-      echo "Existing vLLM service stopped; port $PORT is free."
-      return
-    fi
-    sleep 1
-  done
-
-  echo "Existing service did not stop within ${SERVER_STOP_TIMEOUT}s; sending SIGKILL."
-  for pgid in "${!target_groups[@]}"; do
-    kill -KILL -- "-$pgid" 2>/dev/null || true
-  done
-  for pid in "${!target_pids[@]}"; do
-    kill -KILL -- "$pid" 2>/dev/null || true
-  done
-
-  for (( waited = 0; waited < 10; waited++ )); do
-    mapfile -t remaining < <(list_port_listener_pids)
-    targets_running=0
-    for pgid in "${!target_groups[@]}"; do
-      if process_group_has_live_members "$pgid"; then
-        targets_running=1
-        break
-      fi
-    done
-    if (( ! targets_running )); then
-      for pid in "${!target_pids[@]}"; do
-        if process_is_live "$pid"; then
-          targets_running=1
-          break
-        fi
-      done
-    fi
-    if (( ${#remaining[@]} == 0 && ! targets_running )); then
-      echo "Existing vLLM service was force-stopped; port $PORT is free."
-      return
-    fi
-    sleep 1
-  done
-
-  echo "ERROR: port $PORT is still occupied after stopping the existing service." >&2
-  return 1
-}
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 benchmark_started_at="$(
@@ -539,7 +346,20 @@ EOF
 fi
 
 if (( ! PREPARE_ONLY )); then
-  stop_existing_server
+  if ! command -v vllm-service-launch >/dev/null 2>&1; then
+    echo "ERROR: vllm-service-launch is not installed." >&2
+    exit 1
+  fi
+  for service_id in \
+      "$DP_DECODE_SERVICE_ID" \
+      "$DP_PREFILL_SERVICE_ID" \
+      "$PCP_PREFILL_SERVICE_ID"; do
+    if vllm-service-launch status \
+        --service-id "$service_id" >/dev/null 2>&1; then
+      echo "Stopping existing launcher service $service_id..."
+      vllm-service-launch stop --service-id "$service_id"
+    fi
+  done
 fi
 
 environment_update_args=()
@@ -603,82 +423,89 @@ if (( PREPARE_ONLY )); then
   exit 0
 fi
 
-if ! command -v setsid >/dev/null 2>&1; then
-  echo "ERROR: setsid is required for reliable server cleanup." >&2
-  exit 1
-fi
-
-SERVER_PID=""
 SERVER_CONFIG=""
+SERVER_SERVICE_ID=""
 RUN_SUCCEEDED=0
 REPORT_GENERATED=0
 BENCHMARK_FAILURES=0
 
+archive_server_log() {
+  if [[ -z "$SERVER_SERVICE_ID" ]]; then
+    return
+  fi
+  journalctl \
+    -u "vllm@${SERVER_SERVICE_ID}.service" \
+    --since "$benchmark_started_at" \
+    --no-pager \
+    > "$RUN_DIR/${SERVER_CONFIG}_server.log" 2>&1 || true
+}
+
 stop_server() {
   local target_config
-  local target_pid
+  local target_service_id
 
-  if [[ -z "$SERVER_PID" ]]; then
+  if [[ -z "$SERVER_SERVICE_ID" ]]; then
     return
   fi
   if (( KEEP_SERVER_RUNNING && RUN_SUCCEEDED )); then
-    echo "Keeping $SERVER_CONFIG server process group $SERVER_PID running."
+    archive_server_log
+    echo "Keeping $SERVER_CONFIG launcher service $SERVER_SERVICE_ID running."
     return
   fi
 
-  target_pid=$SERVER_PID
   target_config=$SERVER_CONFIG
-  echo "Stopping $target_config server process group $target_pid..."
-  kill -TERM -- "-$target_pid" 2>/dev/null || true
-  for _ in {1..30}; do
-    if ! kill -0 -- "-$target_pid" 2>/dev/null; then
-      wait "$target_pid" 2>/dev/null || true
-      SERVER_PID=""
-      SERVER_CONFIG=""
-      echo "$target_config server stopped."
-      return
-    fi
-    sleep 1
-  done
-
-  echo "$target_config server did not stop after 30 seconds; sending SIGKILL."
-  kill -KILL -- "-$target_pid" 2>/dev/null || true
-  wait "$target_pid" 2>/dev/null || true
-  SERVER_PID=""
+  target_service_id=$SERVER_SERVICE_ID
+  echo "Stopping $target_config launcher service $target_service_id..."
+  if vllm-service-launch status \
+      --service-id "$target_service_id" >/dev/null 2>&1; then
+    vllm-service-launch stop --service-id "$target_service_id"
+  fi
+  archive_server_log
+  SERVER_SERVICE_ID=""
   SERVER_CONFIG=""
+  echo "$target_config server stopped."
 }
 
 start_server() {
   local benchmark_config=$1
   local server_script=$2
   local server_model_dir=$3
-  local server_log="$RUN_DIR/${benchmark_config}_server.log"
+  local service_id=$4
+  local launch_log="$RUN_DIR/${benchmark_config}_launcher.log"
+  local status_path="$RUN_DIR/${benchmark_config}_service_status.json"
   local ready=0
 
-  if [[ -n "$SERVER_PID" ]]; then
+  if [[ -n "$SERVER_SERVICE_ID" ]]; then
     echo "ERROR: cannot start $benchmark_config while $SERVER_CONFIG is running." >&2
     return 1
   fi
 
   echo "Starting $benchmark_config inference server..."
-  setsid env \
+  SERVER_CONFIG=$benchmark_config
+  SERVER_SERVICE_ID=$service_id
+  if ! env \
     PORT="$PORT" \
     VENV_DIR="$VENV_DIR" \
     TORCHTPU_DIR="$TORCHTPU_DIR" \
     MODEL_DIR="$server_model_dir" \
-    "$server_script" > "$server_log" 2>&1 &
-  SERVER_PID=$!
-  SERVER_CONFIG=$benchmark_config
-  echo "$SERVER_PID" > "$RUN_DIR/${benchmark_config}_server.pid"
+    LAUNCH_ENV_FILE="$RUN_DIR/launcher/${benchmark_config}.env" \
+    "$server_script" > "$launch_log" 2>&1; then
+    echo "ERROR: $benchmark_config launcher submission failed." >&2
+    tail -n 200 "$launch_log" >&2
+    return 1
+  fi
 
   for (( waited = 0; waited < SERVER_READY_TIMEOUT; waited += 2 )); do
     if curl -fsS --max-time 2 "http://127.0.0.1:$PORT/health" >/dev/null; then
       ready=1
       break
     fi
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+    if ! vllm-service-launch status \
+        --service-id "$service_id" \
+        --json > "$status_path"; then
       echo "ERROR: $benchmark_config server exited during startup." >&2
-      tail -n 200 "$server_log" >&2
+      archive_server_log
+      tail -n 200 "$RUN_DIR/${benchmark_config}_server.log" >&2
       return 1
     fi
     if (( waited > 0 && waited % 60 == 0 )); then
@@ -689,9 +516,13 @@ start_server() {
 
   if (( ! ready )); then
     echo "ERROR: $benchmark_config server did not become healthy within ${SERVER_READY_TIMEOUT}s." >&2
-    tail -n 200 "$server_log" >&2
+    archive_server_log
+    tail -n 200 "$RUN_DIR/${benchmark_config}_server.log" >&2
     return 1
   fi
+  vllm-service-launch status \
+    --service-id "$service_id" \
+    --json > "$status_path"
   echo "$benchmark_config server is healthy on port $PORT."
 }
 
@@ -882,7 +713,10 @@ trap on_signal INT TERM
 
 if (( RUN_DP_DECODE )); then
   if start_server \
-      dp8_decode_c256 "$SCRIPT_DIR/start_dp_decode_server.sh" "$MODEL_DIR"; then
+      dp8_decode_c256 \
+      "$SCRIPT_DIR/start_dp_decode_server.sh" \
+      "$MODEL_DIR" \
+      "$DP_DECODE_SERVICE_ID"; then
     if run_decode_benchmark; then
       DP_DECODE_STATUS=success
     else
@@ -900,7 +734,11 @@ if (( RUN_DP_DECODE )); then
 fi
 
 if (( RUN_DP_PREFILL )); then
-  if start_server dp8 "$SCRIPT_DIR/start_dp_server.sh" "$MODEL_DIR"; then
+  if start_server \
+      dp8 \
+      "$SCRIPT_DIR/start_dp_server.sh" \
+      "$MODEL_DIR" \
+      "$DP_PREFILL_SERVICE_ID"; then
     if run_prefill_benchmark dp8; then
       DP_PREFILL_STATUS=success
     else
@@ -926,7 +764,11 @@ if (( RUN_DP_PREFILL )); then
 fi
 
 if (( RUN_PCP_PREFILL )); then
-  if start_server pcp8 "$SCRIPT_DIR/start_pcp_server.sh" "$MODEL_DIR"; then
+  if start_server \
+      pcp8 \
+      "$SCRIPT_DIR/start_pcp_server.sh" \
+      "$MODEL_DIR" \
+      "$PCP_PREFILL_SERVICE_ID"; then
     if run_prefill_benchmark pcp8; then
       PCP_PREFILL_STATUS=success
     else

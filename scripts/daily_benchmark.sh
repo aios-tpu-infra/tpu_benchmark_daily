@@ -10,6 +10,7 @@ TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
+SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-120}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
@@ -156,7 +157,7 @@ case "$BENCHMARK_SELECTION" in
 esac
 RUN_PREFILL=$(( RUN_DP_PREFILL || RUN_PCP_PREFILL ))
 
-for value_name in PORT SERVER_READY_TIMEOUT; do
+for value_name in PORT SERVER_READY_TIMEOUT SERVER_STOP_TIMEOUT; do
   value=${!value_name}
   if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value == 0 )); then
     echo "ERROR: $value_name must be a positive integer, got '$value'." >&2
@@ -443,6 +444,7 @@ archive_server_log() {
 stop_server() {
   local target_config
   local target_service_id
+  local waited
 
   if [[ -z "$SERVER_SERVICE_ID" ]]; then
     return
@@ -459,6 +461,20 @@ stop_server() {
   if vllm-service-launch status \
       --service-id "$target_service_id" >/dev/null 2>&1; then
     vllm-service-launch stop --service-id "$target_service_id"
+  fi
+  for (( waited = 0; waited < SERVER_STOP_TIMEOUT; waited += 1 )); do
+    if ! ss -H -ltn "sport = :$PORT" | grep -q .; then
+      break
+    fi
+    if (( waited > 0 && waited % 10 == 0 )); then
+      echo "Waiting for $target_config server to release port $PORT..."
+    fi
+    sleep 1
+  done
+  if ss -H -ltn "sport = :$PORT" | grep -q .; then
+    echo "ERROR: $target_config server did not release port $PORT within ${SERVER_STOP_TIMEOUT}s." >&2
+    archive_server_log
+    return 1
   fi
   archive_server_log
   SERVER_SERVICE_ID=""

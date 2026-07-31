@@ -2,33 +2,94 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-07-31T03:16:42+00:00",
-      "concurrency": null,
+      "completed_at": "2026-07-31T04:47:33+00:00",
+      "concurrency": 256,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
-      "decode_peak_active_tpot_p50_ms": 49.64182935267066,
+      "decode_peak_active_tpot_p50_ms": 49.636952326788254,
       "decode_status": "success",
-      "decode_window_p50_throughput": 4181.900000000001,
+      "decode_window_p50_throughput": 4181.466666666666,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": null,
+      "mean_ttft_ms": 35960.130635905894,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": null,
-      "prefill_ttft_status": "failed",
-      "request_throughput": -1.0,
-      "run_id": "20260731T022331Z",
-      "single_request_ttft_results": [],
-      "status": "failed",
+      "p99_ttft_ms": 50730.20081171591,
+      "prefill_ttft_status": "success",
+      "request_throughput": 5.35754199581572,
+      "run_id": "20260731T031822Z",
+      "single_request_ttft_results": [
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 8192,
+          "label": "8K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 1638.6368215025868
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 16384,
+          "label": "16K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 3361.0509104910307
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 32768,
+          "label": "32K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 6924.851880525239
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 65536,
+          "label": "64K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 14823.101931979181
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 131072,
+          "label": "128K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 33634.36010447913
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 258048,
+          "label": "252K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 81342.63553499477
+        }
+      ],
+      "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260728090214",
       "torchtpu_vllm_revision": "cfc1a6199b196652234a0fad1c797c0958698baf",
-      "total_token_throughput": -1.0
+      "total_token_throughput": 43894.34157171819
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-07-31T03:16:42+00:00",
-      "concurrency": null,
+      "completed_at": "2026-07-31T05:46:19+00:00",
+      "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
       "decode_peak_active_tpot_p50_ms": null,
@@ -36,21 +97,82 @@
       "decode_window_p50_throughput": null,
       "input_length": 8192,
       "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": null,
+      "mean_ttft_ms": 2241.7483823260227,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": null,
-      "prefill_ttft_status": "failed",
-      "request_throughput": -1.0,
-      "run_id": "20260731T022331Z",
-      "single_request_ttft_results": [],
-      "status": "failed",
+      "p99_ttft_ms": 2328.859200141742,
+      "prefill_ttft_status": "success",
+      "request_throughput": 7.038383465729001,
+      "run_id": "20260731T031822Z",
+      "single_request_ttft_results": [
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 8192,
+          "label": "8K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 606.1498599592596
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 16384,
+          "label": "16K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 670.2728205127642
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 32768,
+          "label": "32K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 797.9916095209774
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 65536,
+          "label": "64K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 1738.2770930416882
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 131072,
+          "label": "128K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 3990.8309090242255
+        },
+        {
+          "completed": 16,
+          "error": "",
+          "failed": 0,
+          "input_length": 258048,
+          "label": "252K",
+          "output_length": 1,
+          "status": "success",
+          "ttft_ms": 9858.6716009886
+        }
+      ],
+      "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260728090214",
       "torchtpu_vllm_revision": "cfc1a6199b196652234a0fad1c797c0958698baf",
-      "total_token_throughput": -1.0
+      "total_token_throughput": 57665.4757347177
     }
   },
   "schema_version": 7,
-  "updated_at": "2026-07-31T03:16:42+00:00"
+  "updated_at": "2026-07-31T05:46:19+00:00"
 }

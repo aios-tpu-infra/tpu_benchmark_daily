@@ -441,6 +441,20 @@ archive_server_log() {
     > "$RUN_DIR/${SERVER_CONFIG}_server.log" 2>&1 || true
 }
 
+server_port_is_bindable() {
+  "$VENV_DIR/bin/python" - "$PORT" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+    try:
+        probe.bind(("0.0.0.0", port))
+    except OSError:
+        raise SystemExit(1)
+PY
+}
+
 stop_server() {
   local target_config
   local target_service_id
@@ -463,7 +477,7 @@ stop_server() {
     vllm-service-launch stop --service-id "$target_service_id"
   fi
   for (( waited = 0; waited < SERVER_STOP_TIMEOUT; waited += 1 )); do
-    if ! ss -H -ltn "sport = :$PORT" | grep -q .; then
+    if server_port_is_bindable; then
       break
     fi
     if (( waited > 0 && waited % 10 == 0 )); then
@@ -471,7 +485,7 @@ stop_server() {
     fi
     sleep 1
   done
-  if ss -H -ltn "sport = :$PORT" | grep -q .; then
+  if ! server_port_is_bindable; then
     echo "ERROR: $target_config server did not release port $PORT within ${SERVER_STOP_TIMEOUT}s." >&2
     archive_server_log
     return 1

@@ -32,3 +32,5 @@ run_id,benchmark_config,benchmark_status,status,completed_at,input_length,input_
 20260730T160002Z,dp8,failed,failed,2026-07-30T17:23:50+00:00,,,,,,
 20260731T012921Z,dp8,failed,failed,2026-07-31T02:22:27+00:00,,,,,,
 20260731T012921Z,pcp8,failed,failed,2026-07-31T02:22:27+00:00,,,,,,
+20260731T022331Z,dp8,failed,failed,2026-07-31T03:16:42+00:00,,,,,,
+20260731T022331Z,pcp8,failed,failed,2026-07-31T03:16:42+00:00,,,,,,

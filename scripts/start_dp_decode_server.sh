@@ -78,7 +78,7 @@ export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 
 # The daily environment still requires these caches to be disabled because
 # TorchTPU split compiler artifacts are not serializable.
-export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
+#export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
 export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
 export RAY_memory_monitor_refresh_ms=0
 
@@ -101,6 +101,7 @@ export TORCH_TPU_DP_MASTER_PORT="${TORCH_TPU_DP_MASTER_PORT:-29645}"
 DEFAULT_LIBTPU_INIT_ARGS=" --xla_tpu_use_dynamic_smem_negotiation=true"
 DEFAULT_LIBTPU_INIT_ARGS+=" --xla_tpu_scoped_vmem_limit_kib=65536"
 export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:-$DEFAULT_LIBTPU_INIT_ARGS}"
+echo $LIBTPU_INIT_ARGS
 unset TPU_XPROF_DEVICE_COUNTERS
 unset VLLM_TORCH_PROFILER_DIR
 
@@ -146,7 +147,7 @@ if [[ -L "$COMPILE_CACHE_ROOT" ]] ||
   exit 1
 fi
 mkdir -p "$COMPILE_CACHE_ROOT"
-find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
+# find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
 
 # Keep runtime temporary files on the project's data filesystem as well. This
 # path intentionally lives at the mount root so ZMQ's IPC endpoint remains
@@ -236,8 +237,6 @@ exec "$VENV_DIR/bin/python" \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
   --async-scheduling \
   --enable-prompt-tokens-details \
-  --disable-log-stats \
-  --no-enable-log-requests \
   --no-enable-prefix-caching \
   --attention-backend CUSTOM \
   --limit-mm-per-prompt '{"image":0,"video":0}' \

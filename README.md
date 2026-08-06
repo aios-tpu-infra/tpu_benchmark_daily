@@ -86,12 +86,12 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
   0.932285943, async scheduling, GDN v3, prefix cache disabled, and the same
   compile shapes as the current standalone C256 test；服务由
   `vllm-service-launch` 以 `role=decode` 托管。
-- `scripts/start_dp_server.sh`: starts the real-weight DP8/PCP1 vLLM server
-  with unified pool and an auto-derived block size；服务由
-  `vllm-service-launch` 以 `role=prefill` 托管。
-- `scripts/start_pcp_server.sh`: starts the real-weight DP1/PCP8 vLLM server
-  with unified pool and an auto-derived block size；服务由
-  `vllm-service-launch` 以 `role=prefill` 托管。
+- `scripts/start_prefill_server.sh`: shared real-weight prefill server launcher;
+  `--config dp8` selects DP8/PCP1 and `--config pcp8` selects DP1/PCP8. Both
+  use the unified pool with an auto-derived block size and are managed by
+  `vllm-service-launch` with `role=prefill`.
+- `scripts/start_dp_server.sh` and `scripts/start_pcp_server.sh`: compatibility
+  wrappers that select the corresponding configuration in the shared launcher.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency

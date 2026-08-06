@@ -29,9 +29,9 @@ class TestOnlyScriptsTest(unittest.TestCase):
         )
 
     def test_server_start_scripts_skip_before_touching_runtime(self) -> None:
-        for script_name, config in (
-            ("start_dp_server.sh", "DP8"),
-            ("start_pcp_server.sh", "PCP8"),
+        for script_name, config, parallelism, batched_tokens in (
+            ("start_dp_server.sh", "DP8", "DP=8, PCP=1, TP=1", 4096),
+            ("start_pcp_server.sh", "PCP8", "DP=1, PCP=8, TP=1", 32768),
         ):
             with self.subTest(script_name=script_name):
                 result = self.run_script(
@@ -48,12 +48,80 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     result.stdout,
                 )
                 self.assertIn("max model length:        262144", result.stdout)
+                self.assertIn(f"parallelism:             {parallelism}", result.stdout)
+                self.assertIn(
+                    f"max batched tokens:      {batched_tokens}", result.stdout
+                )
+
+    def test_prefill_server_requires_a_known_config(self) -> None:
+        missing = self.run_script("start_prefill_server.sh", "--test-only")
+        unknown = self.run_script(
+            "start_prefill_server.sh", "--config", "tp8", "--test-only"
+        )
+
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("--config must be dp8 or pcp8", missing.stderr)
+        self.assertEqual(unknown.returncode, 2)
+        self.assertIn("--config must be dp8 or pcp8", unknown.stderr)
+
+    def test_prefill_server_config_matrix(self) -> None:
+        dp = self.run_script(
+            "start_prefill_server.sh", "--config=dp8", "--test-only"
+        )
+        pcp = self.run_script(
+            "start_prefill_server.sh", "--config=pcp8", "--test-only"
+        )
+
+        self.assertEqual(dp.returncode, 0, dp.stderr)
+        self.assertIn("max sequences:           64", dp.stdout)
+        self.assertIn("compile sizes:           2,4,8,16,4096", dp.stdout)
+        self.assertNotIn("long prefill threshold", dp.stdout)
+        self.assertEqual(pcp.returncode, 0, pcp.stderr)
+        self.assertIn("max sequences:           8", pcp.stdout)
+        self.assertIn("compile sizes:           4096", pcp.stdout)
+        self.assertIn("long prefill threshold:  32768", pcp.stdout)
+
+    def test_prefill_wrapper_config_ignores_inherited_config(self) -> None:
+        result = self.run_script(
+            "start_dp_server.sh",
+            "--test-only",
+            environment={"BENCHMARK_CONFIG": "pcp8"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TEST_ONLY: DP8 server startup skipped", result.stdout)
+        self.assertIn("DP=8, PCP=1, TP=1", result.stdout)
+
+    def test_prefill_server_validates_cache_reset_toggle(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "pcp8",
+            "--test-only",
+            environment={"RESET_COMPILE_CACHE": "invalid"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("RESET_COMPILE_CACHE must be 0 or 1", result.stderr)
+
+    def test_prefill_wrappers_only_select_the_config(self) -> None:
+        for script_name, config in (
+            ("start_dp_server.sh", "dp8"),
+            ("start_pcp_server.sh", "pcp8"),
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn('start_prefill_server.sh" --config', script)
+                self.assertIn(f"--config {config}", script)
+                self.assertLessEqual(len(script.splitlines()), 8)
+                self.assertNotIn("vllm-service-launch", script)
 
     def test_all_server_configs_use_auto_sized_unified_pool(self) -> None:
         for script_name in (
             "start_dp_decode_server.sh",
-            "start_dp_server.sh",
-            "start_pcp_server.sh",
+            "start_prefill_server.sh",
         ):
             with self.subTest(script_name=script_name):
                 script = (

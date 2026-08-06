@@ -88,22 +88,22 @@
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-08-06T03:05:06+00:00",
-      "concurrency": 32,
+      "completed_at": "2026-08-06T04:22:32+00:00",
+      "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
       "decode_peak_active_tpot_p50_ms": null,
       "decode_status": "not-run",
       "decode_window_p50_throughput": null,
       "input_length": 8192,
-      "machine_ip": "10.42.4.56",
-      "mean_ttft_ms": 5253.015891315499,
+      "machine_ip": "10.42.4.37",
+      "mean_ttft_ms": 2666.3198877879495,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 5388.892918521306,
+      "p99_ttft_ms": 2704.145994425053,
       "prefill_ttft_status": "success",
-      "request_throughput": 5.91659851034134,
-      "run_id": "20260806T024301Z",
+      "request_throughput": 5.92065712232852,
+      "run_id": "20260806T040306Z",
       "single_request_ttft_results": [
         {
           "completed": 16,
@@ -113,7 +113,7 @@
           "label": "8K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 633.2659480394796
+          "ttft_ms": 631.8407254875638
         },
         {
           "completed": 16,
@@ -123,7 +123,7 @@
           "label": "16K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 702.5601219502278
+          "ttft_ms": 712.9463499877602
         },
         {
           "completed": 16,
@@ -133,7 +133,7 @@
           "label": "32K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 926.3666779734194
+          "ttft_ms": 918.1306365062483
         },
         {
           "completed": 16,
@@ -143,7 +143,7 @@
           "label": "64K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 1962.6366265001707
+          "ttft_ms": 1981.1870490084402
         },
         {
           "completed": 16,
@@ -153,7 +153,7 @@
           "label": "128K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 4447.493851534091
+          "ttft_ms": 4482.037178997416
         },
         {
           "completed": 16,
@@ -163,16 +163,16 @@
           "label": "252K",
           "output_length": 1,
           "status": "success",
-          "ttft_ms": 10728.042495436966
+          "ttft_ms": 10764.826104510576
         }
       ],
       "status": "success",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260728090214",
       "torchtpu_vllm_revision": "f53d6300e29f5d77d704b6799cebdc5bb6103253",
-      "total_token_throughput": 48474.6915952266
+      "total_token_throughput": 48507.94380323756
     }
   },
   "schema_version": 7,
-  "updated_at": "2026-08-06T03:05:06+00:00"
+  "updated_at": "2026-08-06T04:22:32+00:00"
 }

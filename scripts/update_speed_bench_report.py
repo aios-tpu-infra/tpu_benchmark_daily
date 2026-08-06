@@ -45,6 +45,7 @@ CSV_FIELDS = (
     "total_token_throughput",
     "request_throughput",
     "throughput_median_ttft_ms",
+    "throughput_p90_ttft_ms",
     "throughput_p99_ttft_ms",
     "serial_ttft_status",
     "serial_median_ttft_ms",
@@ -92,6 +93,77 @@ def component_metric(component: dict[str, Any], field: str) -> Any:
     return component.get(field) if component.get("status") == "success" else None
 
 
+def summary_concurrency_results(
+    throughput: dict[str, Any],
+) -> list[dict[str, Any]]:
+    raw_results = throughput.get("results")
+    if raw_results is None:
+        raw_results = [throughput]
+    if not isinstance(raw_results, list) or not all(
+        isinstance(item, dict) for item in raw_results
+    ):
+        raise ValueError("invalid SPEED-Bench concurrency results")
+
+    results: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    for component in raw_results:
+        assert isinstance(component, dict)
+        concurrency_value = component.get("configured_max_concurrency")
+        if concurrency_value is None:
+            continue
+        concurrency = int(concurrency_value)
+        if concurrency <= 0 or concurrency in seen:
+            raise ValueError(
+                f"invalid or duplicate SPEED-Bench concurrency: {concurrency}"
+            )
+        seen.add(concurrency)
+        status = str(component.get("status", "failed"))
+        if status not in {"success", "failed"}:
+            raise ValueError(f"invalid concurrency result status: {status!r}")
+        results.append(
+            {
+                "concurrency": concurrency,
+                "status": status,
+                "input_token_throughput": component_metric(
+                    component, "input_token_throughput"
+                ),
+                "total_token_throughput": component_metric(
+                    component, "total_token_throughput"
+                ),
+                "request_throughput": component_metric(
+                    component, "request_throughput"
+                ),
+                "ttft_p50_ms": component_metric(component, "median_ttft_ms"),
+                "ttft_p90_ms": component_metric(component, "p90_ttft_ms"),
+                "ttft_p99_ms": component_metric(component, "p99_ttft_ms"),
+            }
+        )
+    return sorted(results, key=lambda item: item["concurrency"])
+
+
+def record_concurrency_results(run: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_results = run.get("concurrency_results")
+    if isinstance(raw_results, list) and all(
+        isinstance(item, dict) for item in raw_results
+    ):
+        return sorted(raw_results, key=lambda item: int(item["concurrency"]))
+    concurrency = run.get("throughput_concurrency")
+    if concurrency is None:
+        return []
+    return [
+        {
+            "concurrency": int(concurrency),
+            "status": str(run.get("throughput_status", "failed")),
+            "input_token_throughput": run.get("input_token_throughput"),
+            "total_token_throughput": run.get("total_token_throughput"),
+            "request_throughput": run.get("request_throughput"),
+            "ttft_p50_ms": run.get("throughput_median_ttft_ms"),
+            "ttft_p90_ms": run.get("throughput_p90_ttft_ms"),
+            "ttft_p99_ms": run.get("throughput_p99_ttft_ms"),
+        }
+    ]
+
+
 def normalize_benchmark_config(
     value: Any, *, legacy_default: bool = False
 ) -> str:
@@ -121,7 +193,7 @@ def build_record(
         raise ValueError(f"invalid SPEED-Bench summary status: {status!r}")
     benchmark = summary.get("benchmark")
     throughput = summary.get("throughput")
-    serial_ttft = summary.get("serial_ttft")
+    serial_ttft = summary.get("serial_ttft", {"status": "not-run"})
     if not all(isinstance(item, dict) for item in (benchmark, throughput, serial_ttft)):
         raise ValueError("invalid SPEED-Bench summary structure")
     assert isinstance(benchmark, dict)
@@ -139,6 +211,12 @@ def build_record(
         metadata.get(
             "completed_at", datetime.now(UTC).isoformat(timespec="seconds")
         )
+    )
+    concurrency_results = summary_concurrency_results(throughput)
+    primary_result = max(
+        concurrency_results,
+        key=lambda item: item["concurrency"],
+        default={},
     )
     return {
         "run_id": str(metadata.get("run_id", run_dir.name)),
@@ -159,20 +237,16 @@ def build_record(
         "mean_input_tokens": float(benchmark.get("mean_input_tokens", 0)),
         "total_input_tokens": int(benchmark.get("total_input_tokens", 0)),
         "throughput_status": str(throughput.get("status", "failed")),
-        "throughput_concurrency": component_metric(
-            throughput, "configured_max_concurrency"
-        ),
-        "input_token_throughput": component_metric(
-            throughput, "input_token_throughput"
-        ),
-        "total_token_throughput": component_metric(
-            throughput, "total_token_throughput"
-        ),
-        "request_throughput": component_metric(throughput, "request_throughput"),
-        "throughput_median_ttft_ms": component_metric(
-            throughput, "median_ttft_ms"
-        ),
-        "throughput_p99_ttft_ms": component_metric(throughput, "p99_ttft_ms"),
+        "concurrency_results": concurrency_results,
+        # Keep the highest-concurrency result in the legacy flat fields so
+        # existing report readers continue to receive one representative row.
+        "throughput_concurrency": primary_result.get("concurrency"),
+        "input_token_throughput": primary_result.get("input_token_throughput"),
+        "total_token_throughput": primary_result.get("total_token_throughput"),
+        "request_throughput": primary_result.get("request_throughput"),
+        "throughput_median_ttft_ms": primary_result.get("ttft_p50_ms"),
+        "throughput_p90_ttft_ms": primary_result.get("ttft_p90_ms"),
+        "throughput_p99_ttft_ms": primary_result.get("ttft_p99_ms"),
         "serial_ttft_status": str(serial_ttft.get("status", "failed")),
         "serial_mean_ttft_ms": component_metric(serial_ttft, "mean_ttft_ms"),
         "serial_median_ttft_ms": component_metric(serial_ttft, "median_ttft_ms"),
@@ -266,7 +340,29 @@ def render_csv(runs: list[dict[str, Any]]) -> str:
         lineterminator="\n",
     )
     writer.writeheader()
-    writer.writerows(runs)
+    for run in runs:
+        concurrency_results = record_concurrency_results(run)
+        if not concurrency_results:
+            writer.writerow(run)
+            continue
+        for result in concurrency_results:
+            writer.writerow(
+                {
+                    **run,
+                    "throughput_status": result.get("status"),
+                    "throughput_concurrency": result.get("concurrency"),
+                    "input_token_throughput": result.get(
+                        "input_token_throughput"
+                    ),
+                    "total_token_throughput": result.get(
+                        "total_token_throughput"
+                    ),
+                    "request_throughput": result.get("request_throughput"),
+                    "throughput_median_ttft_ms": result.get("ttft_p50_ms"),
+                    "throughput_p90_ttft_ms": result.get("ttft_p90_ms"),
+                    "throughput_p99_ttft_ms": result.get("ttft_p99_ms"),
+                }
+            )
     return output.getvalue()
 
 
@@ -292,33 +388,48 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     latest_config = normalize_benchmark_config(
         latest.get("benchmark_config"), legacy_default=True
     )
-    throughput = display_metric(
-        latest.get("input_token_throughput"), suffix=" input tok/s"
-    )
-    serial_ttft = display_metric(
-        latest.get("serial_median_ttft_ms"), suffix=" ms median"
+    latest_results = record_concurrency_results(latest)
+    latest_metrics = []
+    for result in latest_results:
+        concurrency = int(result["concurrency"])
+        if result.get("status") != "success":
+            latest_metrics.append(f"C{concurrency} **failed**")
+            continue
+        input_throughput = display_metric(
+            result.get("input_token_throughput"), suffix=" input tok/s"
+        )
+        latest_metrics.append(
+            f"C{concurrency} **{input_throughput}**, "
+            "TTFT P50/P90/P99 "
+            f"**{display_metric(result.get('ttft_p50_ms'))}/"
+            f"{display_metric(result.get('ttft_p90_ms'))}/"
+            f"{display_metric(result.get('ttft_p99_ms'))} ms**"
+        )
+    latest_summary = "; ".join(latest_metrics) or "no concurrency results"
+    concurrency_labels = ", ".join(
+        f"C{int(result['concurrency'])}" for result in latest_results
     )
     lines = [
         (
             f"Latest {config_label(latest_config)} semantic mixed-length result: "
-            f"**{throughput}**, serial TTFT **{serial_ttft}** "
-            f"(`{latest['run_id']}`)."
+            f"{latest_summary} (`{latest['run_id']}`)."
         ),
         "",
         (
-            f"The fixed dataset contains **{latest['num_prompts']}** requests from "
+            "The latest recorded dataset contains "
+            f"**{latest['num_prompts']}** requests from "
             f"NVIDIA SPEED-Bench, ranging from **{latest['min_input_tokens']:,}** "
             f"to **{latest['max_input_tokens']:,}** input tokens "
-            f"(SHA-256 `{latest['dataset_sha256'][:12]}…`). Throughput uses "
-            "concurrency 8; TTFT uses concurrency 1."
+            f"(SHA-256 `{latest['dataset_sha256'][:12]}…`). Each {concurrency_labels} "
+            "serving run reports both throughput and load TTFT."
         ),
         "",
         (
             "| Prefill mode | Dataset SHA-256 | vllm-torchtpu commit | "
-            "Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | "
-            "Serial TTFT median (ms) | P90 (ms) | P99 (ms) |"
+            "Test time (UTC) | C | Status | Input tok/s | Total tok/s | "
+            "TTFT P50 (ms) | TTFT P90 (ms) | TTFT P99 (ms) |"
         ),
-        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for run in reversed(runs[-table_limit:]):
         benchmark_config = normalize_benchmark_config(
@@ -329,17 +440,18 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             f"`{dataset_sha256[:12]}`" if dataset_sha256 else "unknown"
         )
         revision = str(run.get("torchtpu_vllm_revision", "unknown"))[:12]
-        lines.append(
-            "| "
-            f"**{config_label(benchmark_config)}** | {dataset_label} | "
-            f"`{revision}` | {display_time(str(run['completed_at']))} | "
-            f"{run['status']} | "
-            f"{display_metric(run.get('input_token_throughput'))} | "
-            f"{display_metric(run.get('total_token_throughput'))} | "
-            f"{display_metric(run.get('serial_median_ttft_ms'))} | "
-            f"{display_metric(run.get('serial_p90_ttft_ms'))} | "
-            f"{display_metric(run.get('serial_p99_ttft_ms'))} |"
-        )
+        for result in record_concurrency_results(run):
+            lines.append(
+                "| "
+                f"**{config_label(benchmark_config)}** | {dataset_label} | "
+                f"`{revision}` | {display_time(str(run['completed_at']))} | "
+                f"{int(result['concurrency'])} | {result.get('status', 'failed')} | "
+                f"{display_metric(result.get('input_token_throughput'))} | "
+                f"{display_metric(result.get('total_token_throughput'))} | "
+                f"{display_metric(result.get('ttft_p50_ms'))} | "
+                f"{display_metric(result.get('ttft_p90_ms'))} | "
+                f"{display_metric(result.get('ttft_p99_ms'))} |"
+            )
     lines.extend(
         [
             "",

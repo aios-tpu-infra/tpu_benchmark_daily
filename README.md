@@ -10,9 +10,10 @@ plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入�
 16 条 measured requests，并展示 median TTFT。
 
 DP8 prefill 还会额外运行一组固定的真实语义变长请求：从公开的 NVIDIA
-SPEED-Bench 快照中确定性选取 20 条、移除人为长度填充后，输入长度覆盖
-1,038–32,982 tokens。该 workload 分别记录并发度 8 的 input/total token
-吞吐，以及并发度 1、固定 DP rank 的 median/P90/P99 TTFT。PCP 的变长路径
+SPEED-Bench 快照的 4,194 条有效请求中，以 seed 42 全局随机选取 1,000 条；
+移除人为长度填充并全局去重后，输入长度覆盖 756–37,719 tokens。该 workload
+默认分别在并发度 8 和 64 下记录 input/total token 吞吐，以及相同负载下的
+TTFT P50/P90/P99。PCP 的变长路径
 目前存在已知实现问题，因此这组测试暂时只在 DP8 上运行。
 
 三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
@@ -65,7 +66,7 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 <!-- SPEED_BENCH_REPORT_START -->
 Latest DP8 semantic mixed-length result: **20,928.50 input tok/s**, serial TTFT **1,638.92 ms median** (`20260806T160001Z`).
 
-The fixed dataset contains **20** requests from NVIDIA SPEED-Bench, ranging from **1,038** to **32,982** input tokens (SHA-256 `865ccc4fdc3e…`). Throughput uses concurrency 8; TTFT uses concurrency 1.
+The latest recorded dataset contains **20** requests from NVIDIA SPEED-Bench, ranging from **1,038** to **32,982** input tokens (SHA-256 `865ccc4fdc3e…`). Each C8 serving run reports both throughput and load TTFT.
 
 | Prefill mode | Dataset SHA-256 | vllm-torchtpu commit | Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | Serial TTFT median (ms) | P90 (ms) | P99 (ms) |
 | --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
@@ -98,9 +99,10 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
 - `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
   1 for each input length from 8K–252K and writes an independent TTFT summary.
 - `scripts/prepare_speed_bench_mix.py`: deterministically builds the checked-in
-  20-request semantic mixed-length dataset from a raw SPEED-Bench snapshot.
+  1,000-request semantic mixed-length dataset from a raw SPEED-Bench snapshot.
 - `scripts/bench_speed_bench_mix.sh`: runs the DP8 semantic mixed-length
-  throughput and serial-TTFT measurements and validates the raw vLLM results.
+  concurrency sweep and validates throughput plus load-TTFT metrics from every
+  raw vLLM result.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
@@ -208,7 +210,7 @@ measurement type:
 # Run only the existing fixed 8K/multi-length-random prefill measurements.
 scripts/daily_benchmark.sh --only dp-prefill --prefill-workload synthetic
 
-# Run only the 20-request semantic mixed-length workload.
+# Run only the 1,000-request semantic mixed-length workload.
 scripts/daily_benchmark.sh --only dp-prefill --prefill-workload speed-bench
 
 # Combine workload and metric selectors.
@@ -218,11 +220,19 @@ scripts/daily_benchmark.sh --only dp-prefill \
 
 `--prefill-workload all` is the default: DP8 runs both synthetic and semantic
 workloads, while PCP8 runs only the synthetic workload until its variable-length
-path is fixed. The semantic dataset is committed at
-`datasets/speed_bench_mix/requests.jsonl`; its manifest records the source
+path is fixed. The semantic dataset is committed as the gzip artifact
+`datasets/speed_bench_mix/requests.jsonl.gz`; the runner verifies and expands it
+inside the run directory before invoking vLLM. Its manifest records the source
 snapshot revision, source-file hashes, final dataset hash, and exact token
 lengths. Its results are kept separate from the fixed 8K history in
 `reports/speed_bench_history.json` and `reports/speed_bench_history.csv`.
+The mixed-length runner uses concurrency 8 and 64 by default; override the
+space- or comma-separated `SPEED_BENCH_CONCURRENCIES` value to run a different
+sweep. Each concurrency writes `throughput_c<concurrency>.json`, and the same
+vLLM serving result supplies input/total throughput plus TTFT P50/P90/P99.
+For this semantic workload, `--prefill-mode throughput` and
+`--prefill-mode ttft` select the same serving calls because vLLM emits both
+metric families from one request sweep; the mode remains recorded in metadata.
 
 Use fixture-backed test mode to exercise result extraction and report rendering
 without updating the environment, starting a server, sending requests, changing

@@ -15,6 +15,15 @@ SPEED_BENCH_MODE="${SPEED_BENCH_MODE:-all}"
 DATASET_DIR="${SPEED_BENCH_DATASET_DIR:-$PROJECT_ROOT/datasets/speed_bench_mix}"
 TEST_ONLY="${TEST_ONLY:-0}"
 FIXTURE_ROOT="${FIXTURE_ROOT:-$PROJECT_ROOT/tests/fixtures/speed_bench_mix}"
+if [[ -n "${SPEED_BENCH_CONCURRENCIES:-}" ]]; then
+  CONCURRENCY_SPEC=$SPEED_BENCH_CONCURRENCIES
+elif [[ -n "${SPEED_BENCH_THROUGHPUT_CONCURRENCY:-}" ]]; then
+  # Compatibility for callers that selected one concurrency before the sweep
+  # was introduced.
+  CONCURRENCY_SPEC=$SPEED_BENCH_THROUGHPUT_CONCURRENCY
+else
+  CONCURRENCY_SPEC="8 64"
+fi
 
 RUN_DIR=
 while (( $# > 0 )); do
@@ -39,10 +48,14 @@ fi
 mkdir -p "$RUN_DIR"
 RUN_DIR=$(cd -- "$RUN_DIR" && pwd)
 
-if [[ "$BENCHMARK_CONFIG" != dp8 ]]; then
-  echo "ERROR: the SPEED-Bench mixed workload currently supports DP8 only." >&2
-  exit 2
-fi
+case "$BENCHMARK_CONFIG" in
+  dp8) CONFIG_LABEL=DP8 ;;
+  pcp8) CONFIG_LABEL=PCP8 ;;
+  *)
+    echo "ERROR: BENCHMARK_CONFIG must be dp8 or pcp8." >&2
+    exit 2
+    ;;
+esac
 case "$SPEED_BENCH_MODE" in
   all|throughput|ttft) ;;
   *)
@@ -58,17 +71,36 @@ if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT == 0 )); then
   echo "ERROR: PORT must be a positive integer, got '$PORT'." >&2
   exit 2
 fi
+CONCURRENCY_SPEC=${CONCURRENCY_SPEC//,/ }
+read -r -a THROUGHPUT_CONCURRENCIES <<< "$CONCURRENCY_SPEC"
+if (( ${#THROUGHPUT_CONCURRENCIES[@]} == 0 )); then
+  echo "ERROR: SPEED_BENCH_CONCURRENCIES must not be empty." >&2
+  exit 2
+fi
+declare -A SEEN_CONCURRENCIES=()
+for concurrency in "${THROUGHPUT_CONCURRENCIES[@]}"; do
+  if [[ ! "$concurrency" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: invalid SPEED_BENCH_CONCURRENCIES value '$concurrency'." >&2
+    exit 2
+  fi
+  if [[ -n "${SEEN_CONCURRENCIES[$concurrency]:-}" ]]; then
+    echo "ERROR: duplicate SPEED_BENCH_CONCURRENCIES value '$concurrency'." >&2
+    exit 2
+  fi
+  SEEN_CONCURRENCIES[$concurrency]=1
+done
 
-MANIFEST_PATH="$DATASET_DIR/manifest.json"
-DATASET_PATH="$DATASET_DIR/requests.jsonl"
-RESULT_DIR="$RUN_DIR/results/dp8/speed_bench_mix"
-THROUGHPUT_RESULT="$RESULT_DIR/throughput.json"
-TTFT_RESULT="$RESULT_DIR/ttft.json"
+if (( TEST_ONLY )); then
+  MANIFEST_PATH="$FIXTURE_ROOT/manifest.json"
+else
+  MANIFEST_PATH="$DATASET_DIR/manifest.json"
+fi
+RESULT_DIR="$RUN_DIR/results/$BENCHMARK_CONFIG/speed_bench_mix"
 SUMMARY_PATH="$RESULT_DIR/summary.json"
 mkdir -p "$RESULT_DIR"
 
-if [[ ! -f "$MANIFEST_PATH" || ! -f "$DATASET_PATH" ]]; then
-  echo "ERROR: prepared SPEED-Bench dataset is missing beneath $DATASET_DIR." >&2
+if [[ ! -f "$MANIFEST_PATH" ]]; then
+  echo "ERROR: prepared SPEED-Bench manifest is missing: $MANIFEST_PATH." >&2
   exit 1
 fi
 
@@ -82,20 +114,86 @@ if ! command -v "$AGGREGATE_PYTHON" >/dev/null 2>&1; then
   exit 1
 fi
 
-throughput_status=failed
-ttft_status=failed
+if ! NUM_PROMPTS=$(
+  "$AGGREGATE_PYTHON" -c \
+    'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8"))["dataset"]; count=int(data["requests"]); assert count == len(data["input_tokens"]); print(count)' \
+    "$MANIFEST_PATH"
+); then
+  echo "ERROR: failed to read a consistent request count from $MANIFEST_PATH." >&2
+  exit 1
+fi
+if [[ ! "$NUM_PROMPTS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: invalid SPEED-Bench request count: '$NUM_PROMPTS'." >&2
+  exit 1
+fi
+
+mapfile -t DATASET_METADATA < <(
+  "$AGGREGATE_PYTHON" -c \
+    'import json,pathlib,sys; manifest=pathlib.Path(sys.argv[1]); data=json.load(open(manifest, encoding="utf-8"))["dataset"]; path=pathlib.Path(data["path"]); print(path if path.is_absolute() else manifest.parent / path); print(data["sha256"]); print(data.get("artifact_sha256", data["sha256"]))' \
+    "$MANIFEST_PATH"
+)
+if (( ${#DATASET_METADATA[@]} != 3 )); then
+  echo "ERROR: failed to read dataset metadata from $MANIFEST_PATH." >&2
+  exit 1
+fi
+DATASET_ARTIFACT=${DATASET_METADATA[0]}
+DATASET_SHA256=${DATASET_METADATA[1]}
+ARTIFACT_SHA256=${DATASET_METADATA[2]}
+if [[ ! -f "$DATASET_ARTIFACT" ]]; then
+  echo "ERROR: prepared SPEED-Bench dataset is missing: $DATASET_ARTIFACT." >&2
+  exit 1
+fi
+ACTUAL_ARTIFACT_SHA256=$(sha256sum "$DATASET_ARTIFACT" | awk '{print $1}')
+if [[ "$ACTUAL_ARTIFACT_SHA256" != "$ARTIFACT_SHA256" ]]; then
+  echo "ERROR: SPEED-Bench artifact SHA-256 mismatch." >&2
+  exit 1
+fi
+
+if [[ "$DATASET_ARTIFACT" == *.gz ]]; then
+  DATASET_PATH="$RUN_DIR/speed_bench_mix_requests.jsonl"
+  TEMP_DATASET_PATH="$RUN_DIR/.speed_bench_mix_requests.jsonl.tmp"
+  if ! gzip -dc "$DATASET_ARTIFACT" >"$TEMP_DATASET_PATH"; then
+    rm -f -- "$TEMP_DATASET_PATH"
+    echo "ERROR: failed to decompress $DATASET_ARTIFACT." >&2
+    exit 1
+  fi
+  ACTUAL_DATASET_SHA256=$(sha256sum "$TEMP_DATASET_PATH" | awk '{print $1}')
+  if [[ "$ACTUAL_DATASET_SHA256" != "$DATASET_SHA256" ]]; then
+    rm -f -- "$TEMP_DATASET_PATH"
+    echo "ERROR: SPEED-Bench content SHA-256 mismatch after decompression." >&2
+    exit 1
+  fi
+  mv -- "$TEMP_DATASET_PATH" "$DATASET_PATH"
+else
+  DATASET_PATH="$DATASET_ARTIFACT"
+fi
+
+declare -A throughput_statuses=()
+for concurrency in "${THROUGHPUT_CONCURRENCIES[@]}"; do
+  throughput_statuses[$concurrency]=failed
+done
 
 if (( TEST_ONLY )); then
-  if [[ "$SPEED_BENCH_MODE" == all || "$SPEED_BENCH_MODE" == throughput ]]; then
-    cp "$FIXTURE_ROOT/throughput.json" "$THROUGHPUT_RESULT"
-    throughput_status=success
-    echo "TEST_ONLY: replayed SPEED-Bench throughput fixture."
-  fi
-  if [[ "$SPEED_BENCH_MODE" == all || "$SPEED_BENCH_MODE" == ttft ]]; then
-    cp "$FIXTURE_ROOT/ttft.json" "$TTFT_RESULT"
-    ttft_status=success
-    echo "TEST_ONLY: replayed SPEED-Bench serial TTFT fixture."
-  fi
+  for concurrency in "${THROUGHPUT_CONCURRENCIES[@]}"; do
+    throughput_result="$RESULT_DIR/throughput_c${concurrency}.json"
+    "$AGGREGATE_PYTHON" - \
+        "$FIXTURE_ROOT/throughput.json" \
+        "$throughput_result" \
+        "$concurrency" <<'PY'
+import json
+import pathlib
+import sys
+
+source, destination, concurrency = sys.argv[1:]
+data = json.loads(pathlib.Path(source).read_text(encoding="utf-8"))
+data["max_concurrency"] = int(concurrency)
+pathlib.Path(destination).write_text(
+    json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+)
+PY
+    throughput_statuses[$concurrency]=success
+    echo "TEST_ONLY: replayed SPEED-Bench fixture at concurrency $concurrency."
+  done
 else
   if [[ ! -x "$VENV_DIR/bin/vllm" ]]; then
     echo "ERROR: vLLM CLI is missing: $VENV_DIR/bin/vllm" >&2
@@ -130,9 +228,9 @@ else
   )
 
   if ! curl -fsS --max-time 5 "http://$HOST:$PORT/health" >/dev/null; then
-    echo "ERROR: DP8 service is unavailable; SPEED-Bench components will be recorded as failed." >&2
+    echo "ERROR: $CONFIG_LABEL service is unavailable; SPEED-Bench components will be recorded as failed." >&2
   else
-    echo "Warming up DP8 with the first 1K semantic request..."
+    echo "Warming up $CONFIG_LABEL with the first semantic request..."
     if ! "$VENV_DIR/bin/vllm" bench serve \
         "${common_args[@]}" \
         --num-prompts 1 \
@@ -140,62 +238,46 @@ else
         --max-concurrency 1 \
         --header X-data-parallel-rank=0 \
         --result-dir "$RESULT_DIR/warmup" \
-        --label speed_bench_mix_warmup; then
+        --label "speed_bench_mix_${BENCHMARK_CONFIG}_warmup"; then
       echo "WARNING: SPEED-Bench warm-up failed; measured components will still be attempted." >&2
     fi
 
-    if [[ "$SPEED_BENCH_MODE" == all || "$SPEED_BENCH_MODE" == throughput ]]; then
-      echo "Running DP8 SPEED-Bench mixed-length throughput (20 requests, concurrency 8)..."
+    for concurrency in "${THROUGHPUT_CONCURRENCIES[@]}"; do
+      throughput_result="$RESULT_DIR/throughput_c${concurrency}.json"
+      echo "Running $CONFIG_LABEL SPEED-Bench mixed-length workload ($NUM_PROMPTS requests, concurrency $concurrency)..."
       if "$VENV_DIR/bin/vllm" bench serve \
           "${common_args[@]}" \
-          --num-prompts 20 \
-          --max-concurrency 8 \
+          --num-prompts "$NUM_PROMPTS" \
+          --max-concurrency "$concurrency" \
           --save-result \
           --save-detailed \
           --result-dir "$RESULT_DIR" \
-          --result-filename throughput.json \
-          --label speed_bench_mix_dp8_throughput; then
-        throughput_status=success
+          --result-filename "$(basename -- "$throughput_result")" \
+          --label "speed_bench_mix_${BENCHMARK_CONFIG}_c${concurrency}"; then
+        throughput_statuses[$concurrency]=success
       else
-        echo "ERROR: SPEED-Bench mixed-length throughput failed." >&2
+        echo "ERROR: SPEED-Bench concurrency $concurrency failed." >&2
       fi
-    fi
-
-    if [[ "$SPEED_BENCH_MODE" == all || "$SPEED_BENCH_MODE" == ttft ]]; then
-      echo "Running DP8 SPEED-Bench mixed-length serial TTFT (20 requests)..."
-      if "$VENV_DIR/bin/vllm" bench serve \
-          "${common_args[@]}" \
-          --num-prompts 20 \
-          --max-concurrency 1 \
-          --header X-data-parallel-rank=0 \
-          --save-result \
-          --save-detailed \
-          --result-dir "$RESULT_DIR" \
-          --result-filename ttft.json \
-          --label speed_bench_mix_dp8_serial_ttft; then
-        ttft_status=success
-      else
-        echo "ERROR: SPEED-Bench mixed-length serial TTFT failed." >&2
-      fi
-    fi
+    done
   fi
 fi
 
 aggregate_args=(
   --manifest "$MANIFEST_PATH"
   --mode "$SPEED_BENCH_MODE"
-  --benchmark-config dp8
+  --benchmark-config "$BENCHMARK_CONFIG"
   --output-length 1
-  --throughput-status "$throughput_status"
-  --ttft-status "$ttft_status"
   --output "$SUMMARY_PATH"
 )
-if [[ -f "$THROUGHPUT_RESULT" ]]; then
-  aggregate_args+=(--throughput-result "$THROUGHPUT_RESULT")
-fi
-if [[ -f "$TTFT_RESULT" ]]; then
-  aggregate_args+=(--ttft-result "$TTFT_RESULT")
-fi
+for concurrency in "${THROUGHPUT_CONCURRENCIES[@]}"; do
+  throughput_result="$RESULT_DIR/throughput_c${concurrency}.json"
+  aggregate_args+=(
+    --concurrency-status "$concurrency=${throughput_statuses[$concurrency]}"
+  )
+  if [[ -f "$throughput_result" ]]; then
+    aggregate_args+=(--concurrency-result "$concurrency=$throughput_result")
+  fi
+done
 "$AGGREGATE_PYTHON" "$SCRIPT_DIR/aggregate_speed_bench_mix.py" \
   "${aggregate_args[@]}"
 

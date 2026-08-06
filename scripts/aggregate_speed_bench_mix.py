@@ -14,10 +14,6 @@ from pathlib import Path
 from typing import Any
 
 
-COMPONENTS = {
-    "throughput": {"concurrency": 8},
-    "serial_ttft": {"concurrency": 1},
-}
 BENCHMARK_CONFIGS = {"dp8", "pcp8"}
 
 
@@ -68,11 +64,14 @@ def load_manifest(manifest_path: Path) -> tuple[dict[str, Any], Path]:
     dataset_path = manifest_path.parent / str(dataset.get("path", ""))
     if not dataset_path.is_file():
         raise ValueError(f"dataset file is missing: {dataset_path}")
-    expected_sha256 = str(dataset.get("sha256", ""))
+    expected_sha256 = str(
+        dataset.get("artifact_sha256", dataset.get("sha256", ""))
+    )
     actual_sha256 = file_sha256(dataset_path)
     if actual_sha256 != expected_sha256:
         raise ValueError(
-            f"dataset SHA-256 mismatch: {actual_sha256} != {expected_sha256}"
+            "dataset artifact SHA-256 mismatch: "
+            f"{actual_sha256} != {expected_sha256}"
         )
     input_tokens = dataset.get("input_tokens")
     if not isinstance(input_tokens, list) or not input_tokens:
@@ -105,6 +104,7 @@ def summarize_component(
     runner_status: str,
     result_path: Path | None,
     expected_input_lengths: list[int],
+    expected_concurrency: int,
     output_length: int,
 ) -> dict[str, Any]:
     if not requested:
@@ -143,7 +143,6 @@ def summarize_component(
             )
         if int(data.get("num_prompts", 0)) != request_count:
             raise ValueError("num_prompts does not match the dataset")
-        expected_concurrency = int(COMPONENTS[name]["concurrency"])
         if int(data.get("max_concurrency", 0)) != expected_concurrency:
             raise ValueError(
                 f"max_concurrency must be {expected_concurrency} for {name}"
@@ -226,14 +225,78 @@ def summarize_component(
         return failed_component(str(error), result_path)
 
 
+def summarize_concurrency_sweep(
+    *,
+    runs: list[tuple[int, str, Path | None]],
+    expected_input_lengths: list[int],
+    output_length: int,
+) -> dict[str, Any]:
+    if not runs:
+        raise ValueError("at least one concurrency run is required")
+    seen: set[int] = set()
+    results: list[dict[str, Any]] = []
+    for concurrency, runner_status, result_path in runs:
+        if concurrency <= 0:
+            raise ValueError("concurrency values must be positive")
+        if concurrency in seen:
+            raise ValueError(f"duplicate concurrency run: {concurrency}")
+        seen.add(concurrency)
+        component = summarize_component(
+            name=f"concurrency {concurrency}",
+            requested=True,
+            runner_status=runner_status,
+            result_path=result_path,
+            expected_input_lengths=expected_input_lengths,
+            expected_concurrency=concurrency,
+            output_length=output_length,
+        )
+        component["configured_max_concurrency"] = concurrency
+        results.append(component)
+
+    successful = sum(result["status"] == "success" for result in results)
+    if successful == len(results):
+        status = "success"
+    elif successful:
+        status = "partial"
+    else:
+        status = "failed"
+    ordered_results = sorted(
+        results, key=lambda item: item["configured_max_concurrency"]
+    )
+    primary_result = ordered_results[-1]
+    summary = {
+        "status": status,
+        "requested_concurrencies": sorted(seen),
+        "results": ordered_results,
+        "configured_max_concurrency": primary_result[
+            "configured_max_concurrency"
+        ],
+    }
+    # Preserve the previous single-result fields as aliases for the highest
+    # requested concurrency while new consumers iterate over ``results``.
+    for field in (
+        "completed",
+        "failed",
+        "duration_s",
+        "request_throughput",
+        "input_token_throughput",
+        "output_token_throughput",
+        "total_token_throughput",
+        "mean_ttft_ms",
+        "median_ttft_ms",
+        "p90_ttft_ms",
+        "p99_ttft_ms",
+    ):
+        if field in primary_result:
+            summary[field] = primary_result[field]
+    return summary
+
+
 def aggregate(
     *,
     manifest_path: Path,
     mode: str,
-    throughput_result: Path | None,
-    throughput_status: str,
-    ttft_result: Path | None,
-    ttft_status: str,
+    concurrency_runs: list[tuple[int, str, Path | None]],
     benchmark_config: str = "dp8",
     output_length: int = 1,
 ) -> dict[str, Any]:
@@ -248,42 +311,15 @@ def aggregate(
     manifest, dataset_path = load_manifest(manifest_path)
     dataset = manifest["dataset"]
     expected_input_lengths = list(dataset["input_tokens"])
-    requested = {
-        "throughput": mode in {"all", "throughput"},
-        "serial_ttft": mode in {"all", "ttft"},
-    }
-    components = {
-        "throughput": summarize_component(
-            name="throughput",
-            requested=requested["throughput"],
-            runner_status=throughput_status,
-            result_path=throughput_result,
-            expected_input_lengths=expected_input_lengths,
-            output_length=output_length,
-        ),
-        "serial_ttft": summarize_component(
-            name="serial_ttft",
-            requested=requested["serial_ttft"],
-            runner_status=ttft_status,
-            result_path=ttft_result,
-            expected_input_lengths=expected_input_lengths,
-            output_length=output_length,
-        ),
-    }
-    requested_statuses = [
-        components[name]["status"] for name, enabled in requested.items() if enabled
-    ]
-    successful = requested_statuses.count("success")
-    if successful == len(requested_statuses):
-        status = "success"
-    elif successful:
-        status = "partial"
-    else:
-        status = "failed"
+    throughput = summarize_concurrency_sweep(
+        runs=concurrency_runs,
+        expected_input_lengths=expected_input_lengths,
+        output_length=output_length,
+    )
 
     return {
         "schema_version": 1,
-        "status": status,
+        "status": throughput["status"],
         "mode": mode,
         "benchmark": {
             "benchmark_config": benchmark_config,
@@ -300,20 +336,67 @@ def aggregate(
             "mean_input_tokens": statistics.fmean(expected_input_lengths),
             "input_tokens": expected_input_lengths,
         },
-        **components,
+        "throughput": throughput,
+        # Retain the legacy component so older report consumers can distinguish
+        # new concurrency-sweep summaries from old serial-TTFT summaries.
+        "serial_ttft": {"status": "not-run"},
     }
+
+
+def parse_concurrency_runs(
+    result_specs: list[str], status_specs: list[str]
+) -> list[tuple[int, str, Path | None]]:
+    results: dict[int, Path] = {}
+    statuses: dict[int, str] = {}
+    for spec in result_specs:
+        concurrency_text, separator, path_text = spec.partition("=")
+        if not separator or not path_text:
+            raise ValueError(
+                "--concurrency-result must use CONCURRENCY=PATH"
+            )
+        concurrency = int(concurrency_text)
+        if concurrency <= 0 or concurrency in results:
+            raise ValueError(f"invalid or duplicate result concurrency: {concurrency}")
+        results[concurrency] = Path(path_text)
+    for spec in status_specs:
+        concurrency_text, separator, status = spec.partition("=")
+        if not separator or status not in {"success", "failed"}:
+            raise ValueError(
+                "--concurrency-status must use CONCURRENCY=success|failed"
+            )
+        concurrency = int(concurrency_text)
+        if concurrency <= 0 or concurrency in statuses:
+            raise ValueError(f"invalid or duplicate status concurrency: {concurrency}")
+        statuses[concurrency] = status
+    if not statuses:
+        raise ValueError("at least one --concurrency-status is required")
+    unknown_results = sorted(set(results) - set(statuses))
+    if unknown_results:
+        raise ValueError(
+            f"results have no matching status: {unknown_results}"
+        )
+    return [
+        (concurrency, statuses[concurrency], results.get(concurrency))
+        for concurrency in sorted(statuses)
+    ]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--mode", choices=("all", "throughput", "ttft"), required=True)
-    parser.add_argument("--throughput-result", type=Path)
     parser.add_argument(
-        "--throughput-status", choices=("success", "failed"), default="failed"
+        "--concurrency-result",
+        action="append",
+        default=[],
+        metavar="CONCURRENCY=PATH",
     )
-    parser.add_argument("--ttft-result", type=Path)
-    parser.add_argument("--ttft-status", choices=("success", "failed"), default="failed")
+    parser.add_argument(
+        "--concurrency-status",
+        action="append",
+        default=[],
+        metavar="CONCURRENCY=STATUS",
+    )
     parser.add_argument("--benchmark-config", default="dp8")
     parser.add_argument("--output-length", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
@@ -324,13 +407,16 @@ def main() -> None:
     args = parse_args()
     if args.output_length <= 0:
         raise SystemExit("--output-length must be positive")
+    try:
+        concurrency_runs = parse_concurrency_runs(
+            args.concurrency_result, args.concurrency_status
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     summary = aggregate(
         manifest_path=args.manifest,
         mode=args.mode,
-        throughput_result=args.throughput_result,
-        throughput_status=args.throughput_status,
-        ttft_result=args.ttft_result,
-        ttft_status=args.ttft_status,
+        concurrency_runs=concurrency_runs,
         benchmark_config=args.benchmark_config,
         output_length=args.output_length,
     )

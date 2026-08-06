@@ -52,6 +52,10 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 self.assertIn(
                     f"max batched tokens:      {batched_tokens}", result.stdout
                 )
+                self.assertIn(
+                    "compile sizes:           512,1024,2048,4096",
+                    result.stdout,
+                )
 
     def test_prefill_server_requires_a_known_config(self) -> None:
         missing = self.run_script("start_prefill_server.sh", "--test-only")
@@ -74,11 +78,11 @@ class TestOnlyScriptsTest(unittest.TestCase):
 
         self.assertEqual(dp.returncode, 0, dp.stderr)
         self.assertIn("max sequences:           64", dp.stdout)
-        self.assertIn("compile sizes:           4096", dp.stdout)
+        self.assertIn("compile sizes:           512,1024,2048,4096", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           8", pcp.stdout)
-        self.assertIn("compile sizes:           4096", pcp.stdout)
+        self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 
     def test_prefill_wrapper_config_ignores_inherited_config(self) -> None:
@@ -216,7 +220,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
             self.assertEqual(failed["failed"], 16)
             self.assertIsNone(failed["ttft_ms"])
 
-    def test_speed_bench_mix_test_only_replays_both_components(self) -> None:
+    def test_speed_bench_mix_test_only_replays_default_concurrencies(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = self.run_script(
                 "bench_speed_bench_mix.sh",
@@ -239,8 +243,43 @@ class TestOnlyScriptsTest(unittest.TestCase):
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             self.assertEqual(summary["status"], "success")
             self.assertEqual(summary["throughput"]["status"], "success")
-            self.assertEqual(summary["serial_ttft"]["status"], "success")
-            self.assertIn("replayed SPEED-Bench throughput fixture", result.stdout)
+            self.assertEqual(
+                summary["throughput"]["requested_concurrencies"], [8, 64]
+            )
+            self.assertEqual(summary["serial_ttft"]["status"], "not-run")
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 8", result.stdout
+            )
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 64", result.stdout
+            )
+            self.assertTrue((summary_path.parent / "throughput_c8.json").is_file())
+            self.assertTrue((summary_path.parent / "throughput_c64.json").is_file())
+
+    def test_speed_bench_mix_test_only_supports_pcp8(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = self.run_script(
+                "bench_speed_bench_mix.sh",
+                "--test-only",
+                temporary_directory,
+                environment={
+                    "BENCHMARK_CONFIG": "pcp8",
+                    "VENV_DIR": "/missing-test-only-venv",
+                    "MODEL_DIR": "/missing-test-only-model",
+                },
+            )
+            summary_path = (
+                Path(temporary_directory)
+                / "results"
+                / "pcp8"
+                / "speed_bench_mix"
+                / "summary.json"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "success")
+            self.assertEqual(summary["benchmark"]["benchmark_config"], "pcp8")
 
 
 if __name__ == "__main__":

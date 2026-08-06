@@ -1,0 +1,35 @@
+{
+  "dataset": {
+    "input_tokens": [
+      1038,
+      1051,
+      1059,
+      1083,
+      1595,
+      2061,
+      2068,
+      2091,
+      7059,
+      7764,
+      8202,
+      8288,
+      14407,
+      15320,
+      16374,
+      16556,
+      30720,
+      32200,
+      32680,
+      32982
+    ],
+    "max_input_tokens": 32982,
+    "min_input_tokens": 1038,
+    "path": "requests.jsonl",
+    "requests": 20,
+    "sha256": "5fca7ec7fc785d89f8d91c6653f0eb34297983370b530a4d1ded91c550093f76",
+    "total_input_tokens": 234598
+  },
+  "schema_version": 1,
+  "source": "nvidia/SPEED-Bench test fixture",
+  "source_revision": "fixture"
+}

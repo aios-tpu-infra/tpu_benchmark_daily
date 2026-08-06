@@ -165,7 +165,12 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("replayed SPEED-Bench throughput fixture", result.stdout)
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 8", result.stdout
+            )
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 64", result.stdout
+            )
             self.assertNotIn("replayed fixed throughput summary", result.stdout)
             speed_latest_path = next(
                 state_dir.glob(
@@ -176,6 +181,15 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
                 speed_latest_path.read_text(encoding="utf-8")
             )
             self.assertEqual(speed_latest["benchmark"]["status"], "success")
+            self.assertEqual(
+                [
+                    result["concurrency"]
+                    for result in speed_latest["benchmark"][
+                        "concurrency_results"
+                    ]
+                ],
+                [8, 64],
+            )
             fixed_latest_paths = list(
                 state_dir.glob("test-only-preview/*/project/reports/latest.json")
             )

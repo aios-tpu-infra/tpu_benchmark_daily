@@ -32,14 +32,15 @@ Recent DP8 decode throughput over time:
 
 ![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
 
-Latest DP8: **49,536.95 total tok/s** at concurrency **32** (`20260806T001555Z`).
+Latest DP8: **52,337.11 total tok/s** at concurrency **32** (`20260806T013022Z`).
 Latest PCP8: **45,165.61 total tok/s** at concurrency **16** (`20260805T160001Z`).
 
-Latest DP8 single-request TTFT: **success**, **16 serial samples/length** (`20260806T001555Z`).
+Latest DP8 single-request TTFT: **success**, **16 serial samples/length** (`20260806T013022Z`).
 Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`20260805T160001Z`).
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `f53d6300e29f` | 2026-08-06 01:30 | 52,337.11 | — | — | — | — | 1,350.46 | — | 2,770.51 | — | 5,812.90 | — | 12,695.16 | — | 29,747.25 | — | 75,101.33 | — |
 | `f53d6300e29f` | 2026-08-06 00:15 | 49,536.95 | — | — | — | — | 1,478.83 | — | 3,020.83 | — | 6,323.41 | — | 13,736.61 | — | 31,791.95 | — | 79,113.26 | — |
 | `2060adda4744` | 2026-08-05 16:00 | 49,042.41 | 45,165.61 | 4,866.90 | 42.67 | C256 peak-active P50 | 1,477.95 | 691.67 | 3,022.87 | 765.35 | 6,320.08 | 972.52 | 13,718.80 | 2,078.42 | 31,795.93 | 4,668.80 | 79,095.38 | 11,120.77 |
 | `da465492d4df` | 2026-08-04 16:00 | 48,809.66 | 45,543.51 | 4,881.97 | 42.57 | C256 peak-active P50 | 1,476.04 | 685.02 | 3,021.77 | 756.65 | 6,319.50 | 961.64 | 13,723.81 | 2,054.56 | 31,760.88 | 4,637.09 | 78,998.81 | 11,100.22 |
@@ -49,7 +50,6 @@ Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`202
 | `2a0866943935` | 2026-08-03 06:26 | — | 34,784.22 | — | — | — | — | 1,038.59 | — | 1,064.96 | — | 1,178.10 | — | 2,484.27 | — | 5,483.88 | — | 12,852.53 |
 | `5e9c3edd01d7` | 2026-08-02 16:00 | 44,281.39 | 57,775.47 | 4,180.90 | 49.70 | C256 peak-active P50 | 1,639.96 | 605.64 | 3,337.42 | 671.25 | 6,937.65 | 805.16 | 14,843.95 | 1,755.01 | 33,627.28 | 4,015.02 | 81,320.25 | 9,854.42 |
 | `a2d837728d3e` | 2026-08-01 16:00 | 43,558.07 | -1.00 | 4,177.20 | 49.74 | C256 peak-active P50 | 1,638.75 | failed | 3,336.48 | failed | 6,927.48 | failed | 14,850.99 | failed | 33,641.69 | failed | 81,309.38 | failed |
-| `acdce81e9b40` | 2026-07-31 16:00 | 44,266.16 | 57,719.11 | 4,180.77 | 49.72 | C256 peak-active P50 | 1,640.12 | 609.27 | 3,342.54 | 665.13 | 6,927.93 | 797.67 | 14,852.76 | 1,723.34 | 33,689.87 | 3,997.39 | 81,347.20 | 9,868.05 |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

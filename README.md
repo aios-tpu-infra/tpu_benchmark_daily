@@ -65,11 +65,11 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
 <!-- SPEED_BENCH_REPORT_START -->
 Latest DP8 semantic mixed-length result: **18,611.18 input tok/s**, serial TTFT **1,348.76 ms median** (`20260806T061545Z`).
 
-The fixed dataset contains **20** requests from NVIDIA SPEED-Bench, ranging from **1,038** to **32,982** input tokens (SHA-256 `865ccc4fdc3e…`). Throughput uses concurrency 8; TTFT uses concurrency 1 with a fixed DP rank.
+The fixed dataset contains **20** requests from NVIDIA SPEED-Bench, ranging from **1,038** to **32,982** input tokens (SHA-256 `865ccc4fdc3e…`). Throughput uses concurrency 8; TTFT uses concurrency 1.
 
-| vllm-torchtpu commit | Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | Serial TTFT median (ms) | P90 (ms) | P99 (ms) |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `f53d6300e29f` | 2026-08-06 06:25 | success | 18,611.18 | 18,612.76 | 1,348.76 | 5,729.08 | 6,263.70 |
+| Prefill mode | Dataset SHA-256 | vllm-torchtpu commit | Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | Serial TTFT median (ms) | P90 (ms) | P99 (ms) |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| **DP8** | `865ccc4fdc3e` | `f53d6300e29f` | 2026-08-06 06:25 | success | 18,611.18 | 18,612.76 | 1,348.76 | 5,729.08 | 6,263.70 |
 
 Full machine-readable history is stored in [`reports/speed_bench_history.json`](reports/speed_bench_history.json) and [`reports/speed_bench_history.csv`](reports/speed_bench_history.csv).
 <!-- SPEED_BENCH_REPORT_END -->

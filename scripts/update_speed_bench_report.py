@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Record the semantic mixed-length DP8 prefill benchmark."""
+"""Record semantic mixed-length DP8 and PCP8 prefill benchmarks."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import fcntl
 import io
 import json
 import os
+import re
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,8 +20,13 @@ from typing import Any
 SCHEMA_VERSION = 1
 README_START = "<!-- SPEED_BENCH_REPORT_START -->"
 README_END = "<!-- SPEED_BENCH_REPORT_END -->"
+BENCHMARK_CONFIGS = {
+    "dp8": "DP8",
+    "pcp8": "PCP8",
+}
 CSV_FIELDS = (
     "run_id",
+    "benchmark_config",
     "status",
     "mode",
     "started_at",
@@ -86,6 +92,24 @@ def component_metric(component: dict[str, Any], field: str) -> Any:
     return component.get(field) if component.get("status") == "success" else None
 
 
+def normalize_benchmark_config(
+    value: Any, *, legacy_default: bool = False
+) -> str:
+    config = str(value or "").strip().lower()
+    if not config and legacy_default:
+        return "dp8"
+    if config not in BENCHMARK_CONFIGS:
+        supported = ", ".join(BENCHMARK_CONFIGS)
+        raise ValueError(
+            f"benchmark_config must be one of {supported}, got {value!r}"
+        )
+    return config
+
+
+def config_label(config: str) -> str:
+    return BENCHMARK_CONFIGS[config]
+
+
 def build_record(
     project_root: Path, run_dir: Path, summary_path: Path, model: str
 ) -> dict[str, Any]:
@@ -103,8 +127,12 @@ def build_record(
     assert isinstance(benchmark, dict)
     assert isinstance(throughput, dict)
     assert isinstance(serial_ttft, dict)
-    if benchmark.get("benchmark_config") != "dp8":
-        raise ValueError("SPEED-Bench report currently supports DP8 only")
+    benchmark_config = normalize_benchmark_config(
+        benchmark.get("benchmark_config")
+    )
+    dataset_sha256 = str(benchmark.get("dataset_sha256", ""))
+    if re.fullmatch(r"[0-9a-f]{64}", dataset_sha256) is None:
+        raise ValueError("dataset_sha256 must be a lowercase SHA-256 digest")
     metadata_path = run_dir / "run_metadata.json"
     metadata = load_json(metadata_path) if metadata_path.is_file() else {}
     completed_at = datetime.now(UTC).isoformat(timespec="seconds")
@@ -116,10 +144,10 @@ def build_record(
         "completed_at": completed_at,
         "machine_ip": str(metadata.get("machine_ip", "")),
         "model": model,
-        "benchmark_config": "dp8",
+        "benchmark_config": benchmark_config,
         "source": str(benchmark.get("source", "")),
         "source_revision": str(benchmark.get("source_revision", "")),
-        "dataset_sha256": str(benchmark.get("dataset_sha256", "")),
+        "dataset_sha256": dataset_sha256,
         "num_prompts": int(benchmark.get("num_prompts", 0)),
         "output_length": int(benchmark.get("output_length", 0)),
         "min_input_tokens": int(benchmark.get("min_input_tokens", 0)),
@@ -174,14 +202,37 @@ def load_history(path: Path) -> list[dict[str, Any]]:
 def update_history(
     runs: list[dict[str, Any]], record: dict[str, Any]
 ) -> list[dict[str, Any]]:
-    by_run_id = {
-        str(item["run_id"]): item
-        for item in runs
-        if item.get("summary_path") != record.get("summary_path")
-    }
-    by_run_id[str(record["run_id"])] = record
+    record_key = (
+        str(record["run_id"]),
+        normalize_benchmark_config(record.get("benchmark_config")),
+    )
+    by_run_and_config: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in runs:
+        item_config = normalize_benchmark_config(
+            item.get("benchmark_config"), legacy_default=True
+        )
+        item_key = (
+            str(item["run_id"]),
+            item_config,
+        )
+        if item_key == record_key or item.get("summary_path") == record.get(
+            "summary_path"
+        ):
+            continue
+        by_run_and_config[item_key] = {
+            **item,
+            "benchmark_config": item_config,
+        }
+    by_run_and_config[record_key] = record
     return sorted(
-        by_run_id.values(), key=lambda item: (item["completed_at"], item["run_id"])
+        by_run_and_config.values(),
+        key=lambda item: (
+            item["completed_at"],
+            item["run_id"],
+            normalize_benchmark_config(
+                item.get("benchmark_config"), legacy_default=True
+            ),
+        ),
     )
 
 
@@ -234,6 +285,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     if not runs:
         return "No semantic mixed-length benchmark runs have been recorded."
     latest = runs[-1]
+    latest_config = normalize_benchmark_config(
+        latest.get("benchmark_config"), legacy_default=True
+    )
     throughput = display_metric(
         latest.get("input_token_throughput"), suffix=" input tok/s"
     )
@@ -242,7 +296,7 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     )
     lines = [
         (
-            "Latest DP8 semantic mixed-length result: "
+            f"Latest {config_label(latest_config)} semantic mixed-length result: "
             f"**{throughput}**, serial TTFT **{serial_ttft}** "
             f"(`{latest['run_id']}`)."
         ),
@@ -252,20 +306,28 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             f"NVIDIA SPEED-Bench, ranging from **{latest['min_input_tokens']:,}** "
             f"to **{latest['max_input_tokens']:,}** input tokens "
             f"(SHA-256 `{latest['dataset_sha256'][:12]}…`). Throughput uses "
-            "concurrency 8; TTFT uses concurrency 1 with a fixed DP rank."
+            "concurrency 8; TTFT uses concurrency 1."
         ),
         "",
         (
-            "| vllm-torchtpu commit | Test time (UTC) | Status | Input tok/s "
-            "(C8) | Total tok/s (C8) | Serial TTFT median (ms) | P90 (ms) | "
-            "P99 (ms) |"
+            "| Prefill mode | Dataset SHA-256 | vllm-torchtpu commit | "
+            "Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | "
+            "Serial TTFT median (ms) | P90 (ms) | P99 (ms) |"
         ),
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for run in reversed(runs[-table_limit:]):
+        benchmark_config = normalize_benchmark_config(
+            run.get("benchmark_config"), legacy_default=True
+        )
+        dataset_sha256 = str(run.get("dataset_sha256", ""))
+        dataset_label = (
+            f"`{dataset_sha256[:12]}`" if dataset_sha256 else "unknown"
+        )
         revision = str(run.get("torchtpu_vllm_revision", "unknown"))[:12]
         lines.append(
             "| "
+            f"**{config_label(benchmark_config)}** | {dataset_label} | "
             f"`{revision}` | {display_time(str(run['completed_at']))} | "
             f"{run['status']} | "
             f"{display_metric(run.get('input_token_throughput'))} | "
@@ -338,7 +400,8 @@ def main() -> None:
         update_readme(readme_path, render_readme_block(runs, args.table_limit))
 
     print(
-        "Recorded DP8 SPEED-Bench mixed workload: "
+        f"Recorded {config_label(record['benchmark_config'])} "
+        "SPEED-Bench mixed workload: "
         f"{record['status']} (run={record['run_id']})"
     )
     print(f"SPEED-Bench history: {history_path}")

@@ -18,6 +18,7 @@ COMPONENTS = {
     "throughput": {"concurrency": 8},
     "serial_ttft": {"concurrency": 1},
 }
+BENCHMARK_CONFIGS = {"dp8", "pcp8"}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -238,8 +239,12 @@ def aggregate(
 ) -> dict[str, Any]:
     if mode not in {"all", "throughput", "ttft"}:
         raise ValueError(f"invalid benchmark mode: {mode!r}")
-    if benchmark_config != "dp8":
-        raise ValueError("the SPEED-Bench mixed workload currently supports DP8 only")
+    if benchmark_config not in BENCHMARK_CONFIGS:
+        supported = ", ".join(sorted(BENCHMARK_CONFIGS))
+        raise ValueError(
+            f"benchmark_config must be one of {supported}, got "
+            f"{benchmark_config!r}"
+        )
     manifest, dataset_path = load_manifest(manifest_path)
     dataset = manifest["dataset"]
     expected_input_lengths = list(dataset["input_tokens"])

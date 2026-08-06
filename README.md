@@ -9,6 +9,12 @@ plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入�
 8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；每档串行执行
 16 条 measured requests，并展示 median TTFT。
 
+DP8 prefill 还会额外运行一组固定的真实语义变长请求：从公开的 NVIDIA
+SPEED-Bench 快照中确定性选取 20 条、移除人为长度填充后，输入长度覆盖
+1,038–32,982 tokens。该 workload 分别记录并发度 8 的 input/total token
+吞吐，以及并发度 1、固定 DP rank 的 median/P90/P99 TTFT。PCP 的变长路径
+目前存在已知实现问题，因此这组测试暂时只在 DP8 上运行。
+
 三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
 不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
 直接比较，报告历史已从首轮真实权重测试 `20260728T012922Z` 重新开始。
@@ -54,6 +60,20 @@ Latest PCP8 single-request TTFT: **success**, **16 serial samples/length** (`202
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
 
+## Real variable-length prefill benchmark
+
+<!-- SPEED_BENCH_REPORT_START -->
+Latest DP8 semantic mixed-length result: **18,611.18 input tok/s**, serial TTFT **1,348.76 ms median** (`20260806T061545Z`).
+
+The fixed dataset contains **20** requests from NVIDIA SPEED-Bench, ranging from **1,038** to **32,982** input tokens (SHA-256 `865ccc4fdc3e…`). Throughput uses concurrency 8; TTFT uses concurrency 1 with a fixed DP rank.
+
+| vllm-torchtpu commit | Test time (UTC) | Status | Input tok/s (C8) | Total tok/s (C8) | Serial TTFT median (ms) | P90 (ms) | P99 (ms) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `f53d6300e29f` | 2026-08-06 06:25 | success | 18,611.18 | 18,612.76 | 1,348.76 | 5,729.08 | 6,263.70 |
+
+Full machine-readable history is stored in [`reports/speed_bench_history.json`](reports/speed_bench_history.json) and [`reports/speed_bench_history.csv`](reports/speed_bench_history.csv).
+<!-- SPEED_BENCH_REPORT_END -->
+
 ## Layout
 
 - `third_party/torchtpu-vllm/`: `vllm-project/vllm-torchtpu` Git submodule,
@@ -75,6 +95,10 @@ Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV repor
   the configuration selected by `BENCHMARK_CONFIG`.
 - `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
   1 for each input length from 8K–252K and writes an independent TTFT summary.
+- `scripts/prepare_speed_bench_mix.py`: deterministically builds the checked-in
+  20-request semantic mixed-length dataset from a raw SPEED-Bench snapshot.
+- `scripts/bench_speed_bench_mix.sh`: runs the DP8 semantic mixed-length
+  throughput and serial-TTFT measurements and validates the raw vLLM results.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
@@ -175,6 +199,29 @@ prefill to their throughput sweeps. An explicitly supplied `--prefill-mode` is
 rejected with `--only dp-decode` because that selection contains no prefill
 benchmark.
 
+Use `--prefill-workload` to choose the request set independently from the
+measurement type:
+
+```bash
+# Run only the existing fixed 8K/multi-length-random prefill measurements.
+scripts/daily_benchmark.sh --only dp-prefill --prefill-workload synthetic
+
+# Run only the 20-request semantic mixed-length workload.
+scripts/daily_benchmark.sh --only dp-prefill --prefill-workload speed-bench
+
+# Combine workload and metric selectors.
+scripts/daily_benchmark.sh --only dp-prefill \
+  --prefill-workload speed-bench --prefill-mode throughput
+```
+
+`--prefill-workload all` is the default: DP8 runs both synthetic and semantic
+workloads, while PCP8 runs only the synthetic workload until its variable-length
+path is fixed. The semantic dataset is committed at
+`datasets/speed_bench_mix/requests.jsonl`; its manifest records the source
+snapshot revision, source-file hashes, final dataset hash, and exact token
+lengths. Its results are kept separate from the fixed 8K history in
+`reports/speed_bench_history.json` and `reports/speed_bench_history.csv`.
+
 Use fixture-backed test mode to exercise result extraction and report rendering
 without updating the environment, starting a server, sending requests, changing
 durable reports, or publishing:
@@ -187,7 +234,8 @@ The isolated preview is written beneath
 `.state/test-only-preview/<timestamp>/project/`.
 The fixture values are for parser and presentation validation only and must not
 be treated as publishable benchmark measurements. The server scripts and both
-prefill benchmark scripts also accept `--test-only` directly. This mode covers
+fixed-prefill benchmark scripts, plus `bench_speed_bench_mix.sh`, also accept
+`--test-only` directly. This mode covers
 the DP8/PCP8 prefill paths; the C256 decode benchmark remains real-run only.
 Set `TTFT_TEST_ONLY_FAILED_LENGTHS` to a space-separated subset of the configured
 input lengths to preview partial-failure rendering. For example, this marks only

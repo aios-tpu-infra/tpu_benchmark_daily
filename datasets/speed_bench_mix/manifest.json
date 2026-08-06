@@ -1,0 +1,158 @@
+{
+  "dataset": {
+    "input_tokens": [
+      1038,
+      1051,
+      1059,
+      1083,
+      1595,
+      2061,
+      2068,
+      2091,
+      7059,
+      7764,
+      8202,
+      8288,
+      14407,
+      15320,
+      16374,
+      16556,
+      30720,
+      32200,
+      32680,
+      32982
+    ],
+    "max_input_tokens": 32982,
+    "min_input_tokens": 1038,
+    "path": "requests.jsonl",
+    "requests": 20,
+    "sha256": "865ccc4fdc3e54fb9bb50a0f0dd8792145c36dd1826ff19faee2a704272474e1",
+    "total_input_tokens": 234598
+  },
+  "schema_version": 1,
+  "selection": {
+    "category_balanced": true,
+    "deduplication": "global SHA-256 of cleaned prompt",
+    "length_selection": "even quantiles within each category",
+    "max_input_tokens": 258048,
+    "min_input_tokens": 128,
+    "output_tokens": 1,
+    "padding_removed": "Answer now please.",
+    "placeholder_rows": "filtered",
+    "samples_per_subset": 4,
+    "subsets": [
+      "throughput_1k",
+      "throughput_2k",
+      "throughput_8k",
+      "throughput_16k",
+      "throughput_32k"
+    ]
+  },
+  "source": "nvidia/SPEED-Bench",
+  "source_files": [
+    {
+      "bytes": 1952802,
+      "path": "throughput_1k/test-00000-of-00001.parquet",
+      "sha256": "e3aeb2a75680dd35f8eb429cfc471122d1300acd520aec01db3f8476791cb168"
+    },
+    {
+      "bytes": 3713378,
+      "path": "throughput_2k/test-00000-of-00001.parquet",
+      "sha256": "54d4139be1861abb760899b20341f07db699653abb33406ddd0d1af435b6480f"
+    },
+    {
+      "bytes": 12959248,
+      "path": "throughput_8k/test-00000-of-00001.parquet",
+      "sha256": "11fb562ad82bab6af8139135ac18453230bf3233dee3228235634e5fc4939a78"
+    },
+    {
+      "bytes": 25523756,
+      "path": "throughput_16k/test-00000-of-00001.parquet",
+      "sha256": "7e72b4b352c9ebb65f7847c62c446d93a8d2ff049c74d9a158a3c7e3d6ceb8b1"
+    },
+    {
+      "bytes": 52281772,
+      "path": "throughput_32k/test-00000-of-00001.parquet",
+      "sha256": "1be3ac70e00d0b8f0db5b0641fc55d1991c629e6bf0093b2f77b435d0cc92023"
+    }
+  ],
+  "source_revision": "487aa718444e816458d1a0a52bfce7a454285cf4",
+  "subsets": {
+    "throughput_16k": {
+      "duplicates": 4,
+      "eligible": 783,
+      "empty_after_cleanup": 0,
+      "outside_token_range": 0,
+      "placeholders": 749,
+      "rows": 1536,
+      "selected": 4,
+      "selected_input_tokens": [
+        14407,
+        15320,
+        16374,
+        16556
+      ]
+    },
+    "throughput_1k": {
+      "duplicates": 3,
+      "eligible": 894,
+      "empty_after_cleanup": 0,
+      "outside_token_range": 0,
+      "placeholders": 639,
+      "rows": 1536,
+      "selected": 4,
+      "selected_input_tokens": [
+        1038,
+        1051,
+        1059,
+        1083
+      ]
+    },
+    "throughput_2k": {
+      "duplicates": 3,
+      "eligible": 902,
+      "empty_after_cleanup": 0,
+      "outside_token_range": 0,
+      "placeholders": 631,
+      "rows": 1536,
+      "selected": 4,
+      "selected_input_tokens": [
+        1595,
+        2061,
+        2068,
+        2091
+      ]
+    },
+    "throughput_32k": {
+      "duplicates": 11,
+      "eligible": 813,
+      "empty_after_cleanup": 0,
+      "outside_token_range": 0,
+      "placeholders": 712,
+      "rows": 1536,
+      "selected": 4,
+      "selected_input_tokens": [
+        30720,
+        32200,
+        32680,
+        32982
+      ]
+    },
+    "throughput_8k": {
+      "duplicates": 6,
+      "eligible": 802,
+      "empty_after_cleanup": 0,
+      "outside_token_range": 0,
+      "placeholders": 728,
+      "rows": 1536,
+      "selected": 4,
+      "selected_input_tokens": [
+        7059,
+        7764,
+        8202,
+        8288
+      ]
+    }
+  },
+  "tokenizer": "Qwen3.5-397B-A17B-FP8"
+}

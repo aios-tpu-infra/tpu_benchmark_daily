@@ -18,6 +18,9 @@ required_reports=(
   prefill_ttft_history.csv
   throughput_history.csv
   throughput_history.json
+  speed_bench_latest.json
+  speed_bench_history.csv
+  speed_bench_history.json
 )
 for filename in "${required_reports[@]}"; do
   if [[ ! -f "$REPORT_DIR/$filename" ]]; then
@@ -81,7 +84,7 @@ if [[ "$local_tip" != "$remote_tip" ]]; then
 fi
 
 mapfile -t report_metadata < <(
-  python3 - "$REPORT_DIR/latest.json" <<'PY'
+  python3 - "$REPORT_DIR/latest.json" "$REPORT_DIR/speed_bench_latest.json" <<'PY'
 import json
 import re
 import sys
@@ -91,7 +94,12 @@ with open(sys.argv[1], encoding="utf-8") as file:
 benchmarks = latest.get("benchmarks")
 if not isinstance(benchmarks, dict) or not benchmarks:
     raise SystemExit("latest.json does not contain benchmark results")
-newest = max(benchmarks.values(), key=lambda item: item["completed_at"])
+with open(sys.argv[2], encoding="utf-8") as file:
+    speed_latest = json.load(file).get("benchmark")
+candidates = list(benchmarks.values())
+if isinstance(speed_latest, dict):
+    candidates.append(speed_latest)
+newest = max(candidates, key=lambda item: item["completed_at"])
 run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(newest["run_id"]))
 
 
@@ -104,6 +112,10 @@ summary = ", ".join(
     f"{config.upper()} {throughput_text(result)}"
     for config, result in sorted(benchmarks.items())
 )
+if isinstance(speed_latest, dict):
+    speed_value = speed_latest.get("input_token_throughput")
+    speed_text = "N/A" if speed_value is None else f"{float(speed_value):.2f}"
+    summary += f", SPEED-DP8 {speed_text} input"
 print(run_id)
 print(summary)
 PY

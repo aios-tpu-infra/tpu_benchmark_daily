@@ -38,6 +38,8 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("pcp-prefill", result.stdout)
         self.assertIn("--prefill-mode MODE", result.stdout)
         self.assertIn("all, throughput, or ttft", result.stdout)
+        self.assertIn("--prefill-workload WORKLOAD", result.stdout)
+        self.assertIn("all, synthetic, or", result.stdout)
         self.assertIn("--test-only", result.stdout)
         self.assertIn("--commit COMMIT", result.stdout)
         self.assertIn("--torchtpu-commit is an alias", result.stdout)
@@ -76,6 +78,25 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             "--prefill-mode requires a selected DP/PCP prefill benchmark",
             result.stderr,
         )
+
+    def test_prefill_workload_rejects_decode_only_selection(self) -> None:
+        result = self.run_cli(
+            "--only", "dp-decode", "--prefill-workload", "synthetic"
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--prefill-workload requires a selected DP/PCP prefill benchmark",
+            result.stderr,
+        )
+
+    def test_speed_bench_workload_rejects_pcp_only_selection(self) -> None:
+        result = self.run_cli(
+            "--only", "pcp-prefill", "--prefill-workload", "speed-bench"
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("speed-bench requires DP prefill", result.stderr)
 
     def test_throughput_only_replays_no_ttft_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -128,6 +149,45 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             self.assertEqual(pcp8["status"], "not-run")
             self.assertEqual(pcp8["prefill_ttft_status"], "success")
 
+    def test_speed_bench_only_replays_no_synthetic_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--only",
+                "dp-prefill",
+                "--prefill-workload",
+                "speed-bench",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("replayed SPEED-Bench throughput fixture", result.stdout)
+            self.assertNotIn("replayed fixed throughput summary", result.stdout)
+            speed_latest_path = next(
+                state_dir.glob(
+                    "test-only-preview/*/project/reports/speed_bench_latest.json"
+                )
+            )
+            speed_latest = json.loads(
+                speed_latest_path.read_text(encoding="utf-8")
+            )
+            self.assertEqual(speed_latest["benchmark"]["status"], "success")
+            fixed_latest_paths = list(
+                state_dir.glob("test-only-preview/*/project/reports/latest.json")
+            )
+            self.assertEqual(len(fixed_latest_paths), 1)
+            fixed_latest = json.loads(
+                fixed_latest_paths[0].read_text(encoding="utf-8")
+            )
+            self.assertNotEqual(
+                fixed_latest["benchmarks"]["dp8"]["run_id"],
+                speed_latest["benchmark"]["run_id"],
+            )
+
     def test_commit_requires_a_value(self) -> None:
         result = self.run_cli("--commit")
 
@@ -167,7 +227,10 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
 
         self.assertIn("if (( RUN_DP_DECODE )); then", script)
         self.assertIn("if (( RUN_DP_PREFILL )); then", script)
-        self.assertIn("if (( RUN_PCP_PREFILL )); then", script)
+        self.assertIn(
+            "if (( RUN_PCP_PREFILL && RUN_SYNTHETIC_PREFILL )); then",
+            script,
+        )
         self.assertIn("DP_DECODE_STATUS=failed", script)
         self.assertIn("DP_PREFILL_STATUS=failed", script)
         self.assertIn("PCP_PREFILL_STATUS=failed", script)

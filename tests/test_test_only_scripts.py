@@ -148,6 +148,32 @@ class TestOnlyScriptsTest(unittest.TestCase):
             self.assertEqual(failed["failed"], 16)
             self.assertIsNone(failed["ttft_ms"])
 
+    def test_speed_bench_mix_test_only_replays_both_components(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result = self.run_script(
+                "bench_speed_bench_mix.sh",
+                "--test-only",
+                temporary_directory,
+                environment={
+                    "VENV_DIR": "/missing-test-only-venv",
+                    "MODEL_DIR": "/missing-test-only-model",
+                },
+            )
+            summary_path = (
+                Path(temporary_directory)
+                / "results"
+                / "dp8"
+                / "speed_bench_mix"
+                / "summary.json"
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["status"], "success")
+            self.assertEqual(summary["throughput"]["status"], "success")
+            self.assertEqual(summary["serial_ttft"]["status"], "success")
+            self.assertIn("replayed SPEED-Bench throughput fixture", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

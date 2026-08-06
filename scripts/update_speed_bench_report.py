@@ -135,7 +135,11 @@ def build_record(
         raise ValueError("dataset_sha256 must be a lowercase SHA-256 digest")
     metadata_path = run_dir / "run_metadata.json"
     metadata = load_json(metadata_path) if metadata_path.is_file() else {}
-    completed_at = datetime.now(UTC).isoformat(timespec="seconds")
+    completed_at = str(
+        metadata.get(
+            "completed_at", datetime.now(UTC).isoformat(timespec="seconds")
+        )
+    )
     return {
         "run_id": str(metadata.get("run_id", run_dir.name)),
         "status": status,

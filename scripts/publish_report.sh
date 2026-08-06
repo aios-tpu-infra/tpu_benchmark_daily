@@ -115,7 +115,8 @@ summary = ", ".join(
 if isinstance(speed_latest, dict):
     speed_value = speed_latest.get("input_token_throughput")
     speed_text = "N/A" if speed_value is None else f"{float(speed_value):.2f}"
-    summary += f", SPEED-DP8 {speed_text} input"
+    speed_config = str(speed_latest.get("benchmark_config", "dp8")).upper()
+    summary += f", SPEED-{speed_config} {speed_text} input"
 print(run_id)
 print(summary)
 PY

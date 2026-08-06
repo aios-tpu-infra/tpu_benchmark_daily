@@ -110,6 +110,7 @@ class SpeedBenchMixTest(unittest.TestCase):
                 json.dumps(
                     {
                         "started_at": "2026-08-06T06:00:18+00:00",
+                        "completed_at": "2026-08-06T06:02:34+00:00",
                         "machine_ip": "127.0.0.1",
                         "torchtpu_vllm_revision": "f53d6300e29f5d77",
                         "torch_tpu_version": "test",
@@ -151,6 +152,10 @@ class SpeedBenchMixTest(unittest.TestCase):
             readme = (root / "README.md").read_text()
 
         self.assertEqual(len(history["runs"]), 2)
+        self.assertEqual(
+            {item["completed_at"] for item in history["runs"]},
+            {"2026-08-06T06:02:34+00:00"},
+        )
         self.assertEqual(
             {item["benchmark_config"] for item in history["runs"]},
             {"dp8", "pcp8"},

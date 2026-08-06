@@ -56,6 +56,13 @@ class UpdateEnvironmentCliTest(unittest.TestCase):
             result.stderr,
         )
 
+    def test_vllm_source_build_uses_device_neutral_target(self) -> None:
+        script = UPDATE_ENVIRONMENT.read_text()
+
+        self.assertIn("export VLLM_TARGET_DEVICE=empty", script)
+        self.assertIn("--exact", script)
+        self.assertIn("--strict", script)
+
 
 if __name__ == "__main__":
     unittest.main()

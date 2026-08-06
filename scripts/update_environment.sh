@@ -290,14 +290,24 @@ echo "Synchronizing vllm-torchtpu and remaining dependencies..."
 (
   export UV_INDEX_TORCH_TPU_REGISTRY_USERNAME=oauth2accesstoken
   export UV_INDEX_TORCH_TPU_REGISTRY_PASSWORD="$artifact_registry_token"
+  # Recent vllm-torchtpu revisions install vLLM directly from source. Build
+  # only vLLM's device-neutral Python layer here: the out-of-tree torchtpu
+  # plugin supplies the TPU platform at runtime. The CPU target needlessly
+  # compiles native extensions, while the in-tree TPU target also pulls the
+  # mutually exclusive tpu-inference plugin.
+  export VLLM_TARGET_DEVICE=empty
   cd -- "$TORCHTPU_DIR"
   "$UV" pip install \
     --python "$VENV_DIR/bin/python" \
     --upgrade \
     --pre \
+    --exact \
+    --strict \
     --torch-backend "$UV_TORCH_BACKEND" \
     --keyring-provider disabled \
-    --editable .
+    --editable . \
+    pip \
+    uv
 )
 artifact_registry_token=""
 

@@ -74,10 +74,10 @@ class TestOnlyScriptsTest(unittest.TestCase):
 
         self.assertEqual(dp.returncode, 0, dp.stderr)
         self.assertIn("max sequences:           64", dp.stdout)
-        self.assertIn("compile sizes:           2,4,8,16,4096", dp.stdout)
+        self.assertIn("compile sizes:           4096", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
-        self.assertIn("max sequences:           8", pcp.stdout)
+        self.assertIn("max sequences:           64", pcp.stdout)
         self.assertIn("compile sizes:           4096", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 

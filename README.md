@@ -155,6 +155,26 @@ scripts/daily_benchmark.sh --only dp-prefill
 scripts/daily_benchmark.sh --only pcp-prefill
 ```
 
+DP8 and PCP8 prefill run both the 8K throughput sweep and the multi-length
+single-request TTFT sweep by default. Use `--prefill-mode` to select only one:
+
+```bash
+# Run only the 8K concurrency/throughput sweep.
+scripts/daily_benchmark.sh --only dp-prefill --prefill-mode throughput
+scripts/daily_benchmark.sh --only pcp-prefill --prefill-mode throughput
+
+# Run only the 8K–252K single-request TTFT sweep.
+scripts/daily_benchmark.sh --only dp-prefill --prefill-mode ttft
+scripts/daily_benchmark.sh --only pcp-prefill --prefill-mode ttft
+```
+
+`--prefill-mode all` is the default and preserves the existing behavior. The
+mode applies to every selected prefill group, so a full run with
+`--prefill-mode throughput` still runs DP decode but limits both DP8 and PCP8
+prefill to their throughput sweeps. An explicitly supplied `--prefill-mode` is
+rejected with `--only dp-decode` because that selection contains no prefill
+benchmark.
+
 Use fixture-backed test mode to exercise result extraction and report rendering
 without updating the environment, starting a server, sending requests, changing
 durable reports, or publishing:
@@ -180,9 +200,10 @@ TTFT_TEST_ONLY_FAILED_LENGTHS=258048 \
 
 Omitting `--only` preserves the full three-group workflow. A selective run
 updates the environment in the same way as a full run, but validates and starts
-only the service required by the selected benchmark. All selections load the
-real checkpoint and therefore require complete weights in the shared model
-directory.
+only the service required by the selected benchmark. A prefill measurement
+excluded by `--prefill-mode` is recorded as `not-run`, not as a failure. All
+selections load the real checkpoint and therefore require complete weights in
+the shared model directory.
 
 Every selected benchmark group is reported and published unless
 `PUBLISH_REPORTS=0`, including decode-only runs. A failed group records

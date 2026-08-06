@@ -1,5 +1,8 @@
+import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 
@@ -8,10 +11,18 @@ DAILY_RUNNER = PROJECT_ROOT / "scripts" / "daily_benchmark.sh"
 
 
 class DailyBenchmarkSelectionTest(unittest.TestCase):
-    def run_cli(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_cli(
+        self,
+        *arguments: str,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        process_environment = os.environ.copy()
+        if environment:
+            process_environment.update(environment)
         return subprocess.run(
             ["bash", str(DAILY_RUNNER), *arguments],
             cwd=PROJECT_ROOT,
+            env=process_environment,
             check=False,
             capture_output=True,
             text=True,
@@ -25,6 +36,8 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("dp-decode", result.stdout)
         self.assertIn("dp-prefill", result.stdout)
         self.assertIn("pcp-prefill", result.stdout)
+        self.assertIn("--prefill-mode MODE", result.stdout)
+        self.assertIn("all, throughput, or ttft", result.stdout)
         self.assertIn("--test-only", result.stdout)
         self.assertIn("--commit COMMIT", result.stdout)
         self.assertIn("--torchtpu-commit is an alias", result.stdout)
@@ -40,6 +53,80 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2)
         self.assertIn("invalid --only benchmark 'unknown'", result.stderr)
+
+    def test_prefill_mode_requires_a_value(self) -> None:
+        result = self.run_cli("--prefill-mode")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--prefill-mode requires a mode", result.stderr)
+
+    def test_prefill_mode_rejects_an_unknown_mode(self) -> None:
+        result = self.run_cli("--prefill-mode", "latency")
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("invalid --prefill-mode 'latency'", result.stderr)
+
+    def test_prefill_mode_rejects_decode_only_selection(self) -> None:
+        result = self.run_cli(
+            "--only", "dp-decode", "--prefill-mode", "throughput"
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--prefill-mode requires a selected DP/PCP prefill benchmark",
+            result.stderr,
+        )
+
+    def test_throughput_only_replays_no_ttft_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--only",
+                "dp-prefill",
+                "--prefill-mode",
+                "throughput",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("replayed fixed throughput summary", result.stdout)
+            self.assertNotIn("single-request TTFT benchmark", result.stdout)
+            latest_path = next(
+                state_dir.glob("test-only-preview/*/project/reports/latest.json")
+            )
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+            dp8 = latest["benchmarks"]["dp8"]
+            self.assertEqual(dp8["status"], "success")
+            self.assertEqual(dp8["prefill_ttft_status"], "not-run")
+
+    def test_ttft_only_replays_no_throughput_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--only",
+                "pcp-prefill",
+                "--prefill-mode=ttft",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Single-request TTFT benchmark", result.stdout)
+            self.assertNotIn("replayed fixed throughput summary", result.stdout)
+            latest_path = next(
+                state_dir.glob("test-only-preview/*/project/reports/latest.json")
+            )
+            latest = json.loads(latest_path.read_text(encoding="utf-8"))
+            pcp8 = latest["benchmarks"]["pcp8"]
+            self.assertEqual(pcp8["status"], "not-run")
+            self.assertEqual(pcp8["prefill_ttft_status"], "success")
 
     def test_commit_requires_a_value(self) -> None:
         result = self.run_cli("--commit")

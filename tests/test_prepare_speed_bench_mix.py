@@ -65,6 +65,33 @@ class PrepareSpeedBenchMixTest(unittest.TestCase):
         )
         self.assertEqual(len({item.input_tokens for item in first}), 4)
 
+    def test_all_eligible_selection_is_complete_and_deterministic(self) -> None:
+        candidates = [
+            self.candidate("third", "low_entropy", 300),
+            self.candidate("first", "high_entropy", 100),
+            self.candidate("second", "low_entropy", 200),
+        ]
+
+        first = PREPARE.select_candidates(candidates, None)
+        second = PREPARE.select_candidates(list(reversed(candidates)), None)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), len(candidates))
+        self.assertEqual([item.input_tokens for item in first], [100, 200, 300])
+
+    def test_random_selection_is_stable_and_not_length_quantiles(self) -> None:
+        candidates = [
+            self.candidate(str(index), "category", index * 100)
+            for index in range(1, 11)
+        ]
+
+        first = PREPARE.select_random(candidates, 4, 42)
+        second = PREPARE.select_random(list(reversed(candidates)), 4, 42)
+
+        self.assertEqual(first, second)
+        self.assertEqual(len(first), 4)
+        self.assertEqual(len({item.prompt_sha256 for item in first}), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,13 +90,37 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             result.stderr,
         )
 
-    def test_speed_bench_workload_rejects_pcp_only_selection(self) -> None:
-        result = self.run_cli(
-            "--only", "pcp-prefill", "--prefill-workload", "speed-bench"
-        )
+    def test_speed_bench_workload_supports_pcp_only_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--only",
+                "pcp-prefill",
+                "--prefill-workload",
+                "speed-bench",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                },
+            )
 
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("speed-bench requires DP prefill", result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("TEST_ONLY: PCP8 server startup skipped", result.stdout)
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 64", result.stdout
+            )
+            self.assertNotIn("replayed fixed throughput summary", result.stdout)
+            summary_path = next(
+                state_dir.glob(
+                    "test-only-preview/*/runs/*/results/pcp8/"
+                    "speed_bench_mix/summary.json"
+                )
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                summary["benchmark"]["benchmark_config"], "pcp8"
+            )
 
     def test_throughput_only_replays_no_ttft_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -148,6 +172,9 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             pcp8 = latest["benchmarks"]["pcp8"]
             self.assertEqual(pcp8["status"], "not-run")
             self.assertEqual(pcp8["prefill_ttft_status"], "success")
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 8", result.stdout
+            )
 
     def test_speed_bench_only_replays_no_synthetic_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -165,7 +192,12 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("replayed SPEED-Bench throughput fixture", result.stdout)
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 8", result.stdout
+            )
+            self.assertIn(
+                "replayed SPEED-Bench fixture at concurrency 64", result.stdout
+            )
             self.assertNotIn("replayed fixed throughput summary", result.stdout)
             speed_latest_path = next(
                 state_dir.glob(
@@ -176,6 +208,15 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
                 speed_latest_path.read_text(encoding="utf-8")
             )
             self.assertEqual(speed_latest["benchmark"]["status"], "success")
+            self.assertEqual(
+                [
+                    result["concurrency"]
+                    for result in speed_latest["benchmark"][
+                        "concurrency_results"
+                    ]
+                ],
+                [8, 64],
+            )
             fixed_latest_paths = list(
                 state_dir.glob("test-only-preview/*/project/reports/latest.json")
             )
@@ -187,6 +228,47 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
                 fixed_latest["benchmarks"]["dp8"]["run_id"],
                 speed_latest["benchmark"]["run_id"],
             )
+
+    def test_speed_bench_all_selection_records_dp8_and_pcp8(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--prefill-workload",
+                "speed-bench",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summaries = list(
+                state_dir.glob(
+                    "test-only-preview/*/runs/*/results/*/"
+                    "speed_bench_mix/summary.json"
+                )
+            )
+            configs = {
+                json.loads(path.read_text(encoding="utf-8"))["benchmark"][
+                    "benchmark_config"
+                ]
+                for path in summaries
+            }
+            self.assertEqual(configs, {"dp8", "pcp8"})
+            history_path = next(
+                state_dir.glob(
+                    "test-only-preview/*/project/reports/"
+                    "speed_bench_history.json"
+                )
+            )
+            history = json.loads(history_path.read_text(encoding="utf-8"))
+            fixture_configs = {
+                run["benchmark_config"]
+                for run in history["runs"]
+                if run["torchtpu_vllm_revision"] == "test-only-fixture"
+            }
+            self.assertEqual(fixture_configs, {"dp8", "pcp8"})
 
     def test_commit_requires_a_value(self) -> None:
         result = self.run_cli("--commit")
@@ -228,12 +310,13 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("if (( RUN_DP_DECODE )); then", script)
         self.assertIn("if (( RUN_DP_PREFILL )); then", script)
         self.assertIn(
-            "if (( RUN_PCP_PREFILL && RUN_SYNTHETIC_PREFILL )); then",
+            "if (( RUN_PCP_PREFILL )); then",
             script,
         )
         self.assertIn("DP_DECODE_STATUS=failed", script)
         self.assertIn("DP_PREFILL_STATUS=failed", script)
         self.assertIn("PCP_PREFILL_STATUS=failed", script)
+        self.assertIn("PCP_SPEED_BENCH_STATUS=failed", script)
         self.assertIn("record_dp_report", script)
         self.assertIn("record_pcp_report", script)
         self.assertIn("UPDATE_REPORTS=0", script)

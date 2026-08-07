@@ -1,4 +1,6 @@
 import importlib.util
+import gzip
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -7,8 +9,11 @@ import unittest
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MANIFEST = PROJECT_ROOT / "datasets" / "speed_bench_mix" / "manifest.json"
 FIXTURES = PROJECT_ROOT / "tests" / "fixtures" / "speed_bench_mix"
+MANIFEST = FIXTURES / "manifest.json"
+FIXTURE_DATASET_SHA256 = (
+    "5fca7ec7fc785d89f8d91c6653f0eb34297983370b530a4d1ded91c550093f76"
+)
 
 
 def load_module(name: str, path: Path):
@@ -35,39 +40,127 @@ class SpeedBenchMixTest(unittest.TestCase):
         arguments = {
             "manifest_path": MANIFEST,
             "mode": "all",
-            "throughput_result": FIXTURES / "throughput.json",
-            "throughput_status": "success",
-            "ttft_result": FIXTURES / "ttft.json",
-            "ttft_status": "success",
+            "concurrency_runs": [
+                (8, "success", FIXTURES / "throughput.json")
+            ],
         }
         arguments.update(overrides)
         return AGGREGATE.aggregate(**arguments)
 
-    def test_aggregate_extracts_input_throughput_and_serial_ttft(self) -> None:
+    def test_aggregate_extracts_throughput_and_load_ttft(self) -> None:
         summary = self.aggregate()
+        result = summary["throughput"]["results"][0]
 
         self.assertEqual(summary["status"], "success")
         self.assertEqual(summary["benchmark"]["num_prompts"], 20)
         self.assertEqual(summary["benchmark"]["total_input_tokens"], 234598)
         self.assertAlmostEqual(
-            summary["throughput"]["input_token_throughput"],
+            result["input_token_throughput"],
             234598 / 13.568865343928337,
         )
         self.assertAlmostEqual(
-            summary["serial_ttft"]["median_ttft_ms"],
-            1417.3584139789455,
+            result["median_ttft_ms"],
+            2955.2259200718254,
         )
-        observations = summary["serial_ttft"]["observations"]
+        observations = result["observations"]
         self.assertEqual(len(observations), 20)
         self.assertEqual(observations[0]["input_tokens"], 1038)
         self.assertEqual(observations[-1]["input_tokens"], 32982)
 
-    def test_throughput_mode_marks_serial_ttft_not_run(self) -> None:
-        summary = self.aggregate(mode="throughput", ttft_result=None)
+    def test_load_manifest_validates_compressed_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            content = b'{"prompt":"fixture"}\n'
+            artifact = root / "requests.jsonl.gz"
+            artifact.write_bytes(gzip.compress(content, compresslevel=9, mtime=0))
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "dataset": {
+                            "path": artifact.name,
+                            "sha256": hashlib.sha256(content).hexdigest(),
+                            "artifact_sha256": hashlib.sha256(
+                                artifact.read_bytes()
+                            ).hexdigest(),
+                            "requests": 1,
+                            "total_input_tokens": 3,
+                            "input_tokens": [3],
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            manifest, loaded_artifact = AGGREGATE.load_manifest(manifest_path)
+
+        self.assertEqual(loaded_artifact, artifact)
+        self.assertEqual(
+            manifest["dataset"]["sha256"], hashlib.sha256(content).hexdigest()
+        )
+
+    def test_mode_preserves_concurrency_sweep_results(self) -> None:
+        summary = self.aggregate(mode="ttft")
 
         self.assertEqual(summary["status"], "success")
         self.assertEqual(summary["throughput"]["status"], "success")
         self.assertEqual(summary["serial_ttft"]["status"], "not-run")
+
+    def test_throughput_concurrency_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result_path = Path(temporary_directory) / "throughput.json"
+            data = json.loads(
+                (FIXTURES / "throughput.json").read_text(encoding="utf-8")
+            )
+            data["max_concurrency"] = 64
+            result_path.write_text(json.dumps(data), encoding="utf-8")
+            summary = self.aggregate(
+                concurrency_runs=[(64, "success", result_path)],
+            )
+
+        self.assertEqual(summary["status"], "success")
+        self.assertEqual(
+            summary["throughput"]["results"][0][
+                "configured_max_concurrency"
+            ],
+            64,
+        )
+
+    def test_aggregate_keeps_each_requested_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            result_path = Path(temporary_directory) / "throughput_c64.json"
+            data = json.loads(
+                (FIXTURES / "throughput.json").read_text(encoding="utf-8")
+            )
+            data["max_concurrency"] = 64
+            result_path.write_text(json.dumps(data), encoding="utf-8")
+            summary = self.aggregate(
+                concurrency_runs=[
+                    (8, "success", FIXTURES / "throughput.json"),
+                    (64, "success", result_path),
+                ]
+            )
+
+        self.assertEqual(
+            summary["throughput"]["requested_concurrencies"], [8, 64]
+        )
+        self.assertEqual(
+            summary["throughput"]["configured_max_concurrency"], 64
+        )
+        self.assertEqual(
+            [
+                result["configured_max_concurrency"]
+                for result in summary["throughput"]["results"]
+            ],
+            [8, 64],
+        )
+        self.assertTrue(
+            all(
+                result["p90_ttft_ms"] > 0
+                for result in summary["throughput"]["results"]
+            )
+        )
 
     def test_aggregate_accepts_pcp8_and_preserves_dataset_hash(self) -> None:
         summary = self.aggregate(benchmark_config="pcp8")
@@ -75,10 +168,7 @@ class SpeedBenchMixTest(unittest.TestCase):
         self.assertEqual(summary["benchmark"]["benchmark_config"], "pcp8")
         self.assertEqual(
             summary["benchmark"]["dataset_sha256"],
-            (
-                "865ccc4fdc3e54fb9bb50a0f0dd8792145c36dd1826ff19faee2a704"
-                "272474e1"
-            ),
+            FIXTURE_DATASET_SHA256,
         )
 
     def test_dataset_length_mismatch_is_recorded_as_failure(self) -> None:
@@ -90,12 +180,15 @@ class SpeedBenchMixTest(unittest.TestCase):
             data["input_lens"][0] = 999
             result_path.write_text(json.dumps(data), encoding="utf-8")
             summary = self.aggregate(
-                mode="throughput", throughput_result=result_path, ttft_result=None
+                concurrency_runs=[(8, "success", result_path)]
             )
 
         self.assertEqual(summary["status"], "failed")
         self.assertEqual(summary["throughput"]["status"], "failed")
-        self.assertIn("dataset manifest", summary["throughput"]["error"])
+        self.assertIn(
+            "dataset manifest",
+            summary["throughput"]["results"][0]["error"],
+        )
 
     def test_report_history_and_readme_are_updated_separately(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -163,8 +256,9 @@ class SpeedBenchMixTest(unittest.TestCase):
         self.assertIn("SPEED_BENCH_REPORT_START", readme)
         self.assertIn("Real variable-length prefill benchmark", readme)
         self.assertIn("| Prefill mode | Dataset SHA-256 |", readme)
-        self.assertIn("**DP8** | `865ccc4fdc3e`", readme)
-        self.assertIn("**PCP8** | `865ccc4fdc3e`", readme)
+        self.assertIn("TTFT P50 (ms) | TTFT P90 (ms) | TTFT P99 (ms)", readme)
+        self.assertIn(f"**DP8** | `{FIXTURE_DATASET_SHA256[:12]}`", readme)
+        self.assertIn(f"**PCP8** | `{FIXTURE_DATASET_SHA256[:12]}`", readme)
         self.assertLess(
             readme.index("SPEED_BENCH_REPORT_START"), readme.index("## Layout")
         )
@@ -176,9 +270,7 @@ class SpeedBenchMixTest(unittest.TestCase):
         common = {
             "run_id": "20260806T070000Z",
             "completed_at": "2026-08-06T07:10:00+00:00",
-            "dataset_sha256": (
-                "865ccc4fdc3e54fb9bb50a0f0dd8792145c36dd1826ff19faee2a704272474e1"
-            ),
+            "dataset_sha256": FIXTURE_DATASET_SHA256,
         }
         legacy_dp = {
             **common,

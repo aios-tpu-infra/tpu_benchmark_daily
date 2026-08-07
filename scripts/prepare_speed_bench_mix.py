@@ -7,9 +7,11 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 from dataclasses import asdict, dataclass
+import gzip
 import hashlib
 import json
 from pathlib import Path
+import random
 import re
 from typing import Any, Iterable, Sequence
 
@@ -122,6 +124,46 @@ def select_balanced(candidates: Sequence[Candidate], count: int) -> list[Candida
     )
 
 
+def select_candidates(
+    candidates: Sequence[Candidate], count: int | None
+) -> list[Candidate]:
+    """Select a sample, or return every eligible prompt in stable order."""
+    if count is None:
+        return sorted(
+            candidates,
+            key=lambda item: (
+                item.input_tokens,
+                item.question_id,
+                item.prompt_sha256,
+            ),
+        )
+    return select_balanced(candidates, count)
+
+
+def select_random(
+    candidates: Sequence[Candidate], count: int, seed: int
+) -> list[Candidate]:
+    """Uniformly sample candidates in an input-order-independent way."""
+    if count <= 0:
+        raise ValueError("count must be positive")
+    if len(candidates) < count:
+        raise ValueError(f"need {count} candidates, found {len(candidates)}")
+    ordered = sorted(
+        candidates,
+        key=lambda item: (item.subset, item.question_id, item.prompt_sha256),
+    )
+    selected = random.Random(seed).sample(ordered, count)
+    return sorted(
+        selected,
+        key=lambda item: (
+            item.subset,
+            item.input_tokens,
+            item.question_id,
+            item.prompt_sha256,
+        ),
+    )
+
+
 def build_candidates(
     rows: Iterable[dict[str, Any]],
     subset: str,
@@ -199,7 +241,19 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=project_root / "datasets" / "speed_bench_mix",
     )
-    parser.add_argument("--samples-per-subset", type=int, default=4)
+    selection_group = parser.add_mutually_exclusive_group()
+    selection_group.add_argument("--samples-per-subset", type=int, default=4)
+    selection_group.add_argument(
+        "--all-eligible",
+        action="store_true",
+        help="include every cleaned, deduplicated prompt in the token range",
+    )
+    selection_group.add_argument(
+        "--random-sample-total",
+        type=int,
+        help="uniformly sample this many prompts across all eligible subsets",
+    )
+    parser.add_argument("--random-seed", type=int, default=42)
     parser.add_argument("--output-tokens", type=int, default=1)
     parser.add_argument("--min-input-tokens", type=int, default=128)
     parser.add_argument("--max-input-tokens", type=int, default=258048)
@@ -208,8 +262,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.samples_per_subset <= 0:
+    if (
+        not args.all_eligible
+        and args.random_sample_total is None
+        and args.samples_per_subset <= 0
+    ):
         raise SystemExit("--samples-per-subset must be positive")
+    if args.random_sample_total is not None and args.random_sample_total <= 0:
+        raise SystemExit("--random-sample-total must be positive")
     if args.output_tokens <= 0:
         raise SystemExit("--output-tokens must be positive")
     if args.min_input_tokens <= 0 or args.max_input_tokens < args.min_input_tokens:
@@ -225,6 +285,7 @@ def main() -> None:
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir, local_files_only=True)
     output_records: list[dict[str, Any]] = []
+    selected_candidates: list[Candidate] = []
     input_files: list[dict[str, Any]] = []
     subset_stats: dict[str, Any] = {}
     seen_hashes: set[str] = set()
@@ -251,25 +312,66 @@ def main() -> None:
             args.max_input_tokens,
             seen_hashes,
         )
-        selected = select_balanced(candidates, args.samples_per_subset)
+        selected = select_candidates(
+            candidates,
+            (
+                None
+                if args.all_eligible or args.random_sample_total is not None
+                else args.samples_per_subset
+            ),
+        )
+        subset_stats[subset] = counts
+        selected_candidates.extend(selected)
+
+    if args.random_sample_total is not None:
+        selected_candidates = select_random(
+            selected_candidates,
+            args.random_sample_total,
+            args.random_seed,
+        )
+
+    for subset in SUBSETS:
+        subset_selection = [
+            item for item in selected_candidates if item.subset == subset
+        ]
         subset_stats[subset] = {
-            **counts,
-            "selected": len(selected),
-            "selected_input_tokens": [item.input_tokens for item in selected],
+            **subset_stats[subset],
+            "selected": len(subset_selection),
+            "selected_input_tokens": [
+                item.input_tokens for item in subset_selection
+            ],
         }
-        for candidate in selected:
-            record = asdict(candidate)
-            record["output_tokens"] = args.output_tokens
-            output_records.append(record)
+    for candidate in selected_candidates:
+        record = asdict(candidate)
+        record["output_tokens"] = args.output_tokens
+        output_records.append(record)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = args.output_dir / "requests.jsonl"
-    with output_path.open("w", encoding="utf-8") as handle:
-        for record in output_records:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
-            handle.write("\n")
+    archive_path = args.output_dir / "requests.jsonl.gz"
+    dataset_digest = hashlib.sha256()
+    uncompressed_bytes = 0
+    with archive_path.open("wb") as archive_handle:
+        with gzip.GzipFile(
+            filename="",
+            mode="wb",
+            compresslevel=9,
+            fileobj=archive_handle,
+            mtime=0,
+        ) as handle:
+            for record in output_records:
+                line = (
+                    json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n"
+                ).encode("utf-8")
+                dataset_digest.update(line)
+                uncompressed_bytes += len(line)
+                handle.write(line)
 
-    dataset_sha256 = sha256_file(output_path)
+    legacy_output_path = args.output_dir / "requests.jsonl"
+    if legacy_output_path.exists():
+        legacy_output_path.unlink()
+
+    dataset_sha256 = dataset_digest.hexdigest()
+    artifact_sha256 = sha256_file(archive_path)
     input_lengths = [int(record["input_tokens"]) for record in output_records]
     manifest = {
         "schema_version": 1,
@@ -279,9 +381,38 @@ def main() -> None:
         "tokenizer": args.model_dir.name,
         "selection": {
             "subsets": list(SUBSETS),
-            "samples_per_subset": args.samples_per_subset,
-            "category_balanced": True,
-            "length_selection": "even quantiles within each category",
+            "mode": (
+                "all_eligible"
+                if args.all_eligible
+                else (
+                    "random_sample"
+                    if args.random_sample_total is not None
+                    else "balanced_sample"
+                )
+            ),
+            "samples_per_subset": (
+                None
+                if args.all_eligible or args.random_sample_total is not None
+                else args.samples_per_subset
+            ),
+            "random_sample_total": args.random_sample_total,
+            "random_seed": (
+                args.random_seed
+                if args.random_sample_total is not None
+                else None
+            ),
+            "category_balanced": (
+                not args.all_eligible and args.random_sample_total is None
+            ),
+            "length_selection": (
+                "all eligible prompts sorted by input length"
+                if args.all_eligible
+                else (
+                    "uniform random sample across all eligible prompts"
+                    if args.random_sample_total is not None
+                    else "even quantiles within each category"
+                )
+            ),
             "placeholder_rows": "filtered",
             "padding_removed": "Answer now please.",
             "deduplication": "global SHA-256 of cleaned prompt",
@@ -290,8 +421,12 @@ def main() -> None:
             "output_tokens": args.output_tokens,
         },
         "dataset": {
-            "path": output_path.name,
+            "path": archive_path.name,
+            "format": "jsonl+gzip",
             "sha256": dataset_sha256,
+            "artifact_sha256": artifact_sha256,
+            "uncompressed_bytes": uncompressed_bytes,
+            "compressed_bytes": archive_path.stat().st_size,
             "requests": len(output_records),
             "total_input_tokens": sum(input_lengths),
             "min_input_tokens": min(input_lengths),
@@ -305,13 +440,14 @@ def main() -> None:
         json.dump(manifest, handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
 
-    print(f"Wrote {len(output_records)} requests to {output_path}")
+    print(f"Wrote {len(output_records)} requests to {archive_path}")
     print(
         "Input tokens: "
         f"total={sum(input_lengths)}, min={min(input_lengths)}, "
         f"max={max(input_lengths)}"
     )
     print(f"Dataset SHA-256: {dataset_sha256}")
+    print(f"Artifact SHA-256: {artifact_sha256}")
 
 
 if __name__ == "__main__":

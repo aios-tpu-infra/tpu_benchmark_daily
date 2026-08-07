@@ -9,12 +9,11 @@ plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入�
 8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；每档串行执行
 16 条 measured requests，并展示 median TTFT。
 
-DP8 prefill 还会额外运行一组固定的真实语义变长请求：从公开的 NVIDIA
+DP8 和 PCP8 prefill 还会额外运行一组固定的真实语义变长请求：从公开的 NVIDIA
 SPEED-Bench 快照的 4,194 条有效请求中，以 seed 42 全局随机选取 1,000 条；
 移除人为长度填充并全局去重后，输入长度覆盖 756–37,719 tokens。该 workload
 默认分别在并发度 8 和 64 下记录 input/total token 吞吐，以及相同负载下的
-TTFT P50/P90/P99。PCP 的变长路径
-目前存在已知实现问题，因此这组测试暂时只在 DP8 上运行。
+TTFT P50/P90/P99。
 
 三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
 不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
@@ -100,7 +99,7 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
   1 for each input length from 8K–252K and writes an independent TTFT summary.
 - `scripts/prepare_speed_bench_mix.py`: deterministically builds the checked-in
   1,000-request semantic mixed-length dataset from a raw SPEED-Bench snapshot.
-- `scripts/bench_speed_bench_mix.sh`: runs the DP8 semantic mixed-length
+- `scripts/bench_speed_bench_mix.sh`: runs the DP8/PCP8 semantic mixed-length
   concurrency sweep and validates throughput plus load-TTFT metrics from every
   raw vLLM result.
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
@@ -212,15 +211,15 @@ scripts/daily_benchmark.sh --only dp-prefill --prefill-workload synthetic
 
 # Run only the 1,000-request semantic mixed-length workload.
 scripts/daily_benchmark.sh --only dp-prefill --prefill-workload speed-bench
+scripts/daily_benchmark.sh --only pcp-prefill --prefill-workload speed-bench
 
 # Combine workload and metric selectors.
 scripts/daily_benchmark.sh --only dp-prefill \
   --prefill-workload speed-bench --prefill-mode throughput
 ```
 
-`--prefill-workload all` is the default: DP8 runs both synthetic and semantic
-workloads, while PCP8 runs only the synthetic workload until its variable-length
-path is fixed. The semantic dataset is committed as the gzip artifact
+`--prefill-workload all` is the default: both DP8 and PCP8 run the synthetic and
+semantic workloads. The semantic dataset is committed as the gzip artifact
 `datasets/speed_bench_mix/requests.jsonl.gz`; the runner verifies and expands it
 inside the run directory before invoking vLLM. Its manifest records the source
 snapshot revision, source-file hashes, final dataset hash, and exact token

@@ -255,10 +255,19 @@ class SpeedBenchMixTest(unittest.TestCase):
         )
         self.assertIn("SPEED_BENCH_REPORT_START", readme)
         self.assertIn("Real variable-length prefill benchmark", readme)
-        self.assertIn("| Prefill mode | Dataset SHA-256 |", readme)
-        self.assertIn("TTFT P50 (ms) | TTFT P90 (ms) | TTFT P99 (ms)", readme)
-        self.assertIn(f"**DP8** | `{FIXTURE_DATASET_SHA256[:12]}`", readme)
-        self.assertIn(f"**PCP8** | `{FIXTURE_DATASET_SHA256[:12]}`", readme)
+        self.assertIn(
+            "| vllm-torchtpu commit | Test time (UTC) | "
+            "DP C8 | DP C64 | PCP C8 | PCP C64 |",
+            readme,
+        )
+        self.assertIn("TTFT **P50/P90/P99**", readme)
+        self.assertIn(
+            "**17,289.43 tok/s**<br>"
+            "P50/P90/P99: 2,955.23/7,358.11/9,322.68 ms",
+            readme,
+        )
+        # DP and PCP results for the same commit are rendered in one row.
+        self.assertEqual(readme.count("| `f53d6300e29f` |"), 1)
         self.assertLess(
             readme.index("SPEED_BENCH_REPORT_START"), readme.index("## Layout")
         )
@@ -295,6 +304,49 @@ class SpeedBenchMixTest(unittest.TestCase):
             },
             {"dp8", "pcp8"},
         )
+
+    def test_readme_combines_four_orthogonal_results_per_commit(self) -> None:
+        def result(concurrency: int, base: float) -> dict:
+            return {
+                "concurrency": concurrency,
+                "status": "success",
+                "input_token_throughput": base,
+                "total_token_throughput": base + 1,
+                "request_throughput": 1,
+                "ttft_p50_ms": base + 2,
+                "ttft_p90_ms": base + 3,
+                "ttft_p99_ms": base + 4,
+            }
+
+        common = {
+            "run_id": "orthogonal",
+            "status": "success",
+            "completed_at": "2026-08-12T10:00:00+00:00",
+            "torchtpu_vllm_revision": "a" * 40,
+            "num_prompts": 1000,
+            "min_input_tokens": 756,
+            "max_input_tokens": 37719,
+            "dataset_sha256": "b" * 64,
+        }
+        runs = [
+            {
+                **common,
+                "benchmark_config": "dp8",
+                "concurrency_results": [result(8, 100), result(64, 200)],
+            },
+            {
+                **common,
+                "benchmark_config": "pcp8",
+                "concurrency_results": [result(8, 300), result(64, 400)],
+            },
+        ]
+
+        block = UPDATE_REPORT.render_readme_block(runs, 10)
+        row = next(line for line in block.splitlines() if line.startswith("| `aaaaaaaaaaaa`"))
+
+        self.assertEqual(row.count(" tok/s**<br>P50/P90/P99:"), 4)
+        for value in ("100.00", "200.00", "300.00", "400.00"):
+            self.assertIn(f"**{value} tok/s**", row)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ BENCHMARK_CONFIGS = {
     "dp8": "DP8",
     "pcp8": "PCP8",
 }
+README_CONCURRENCIES = (8, 64)
 CSV_FIELDS = (
     "run_id",
     "benchmark_config",
@@ -381,6 +382,65 @@ def display_metric(value: Any, *, suffix: str = "", digits: int = 2) -> str:
     return f"{float(value):,.{digits}f}{suffix}"
 
 
+def readme_commit_rows(
+    runs: list[dict[str, Any]], table_limit: int
+) -> list[dict[str, Any]]:
+    """Group the latest result for each config under one commit row."""
+    grouped: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        revision = str(run.get("torchtpu_vllm_revision") or "unknown")
+        # Unknown legacy revisions must not all collapse into one row.
+        group_key = revision if revision != "unknown" else f"run:{run['run_id']}"
+        row = grouped.setdefault(
+            group_key,
+            {
+                "revision": revision,
+                "completed_at": str(run["completed_at"]),
+                "configs": {},
+            },
+        )
+        completed_at = str(run["completed_at"])
+        if completed_at > row["completed_at"]:
+            row["completed_at"] = completed_at
+        config = normalize_benchmark_config(
+            run.get("benchmark_config"), legacy_default=True
+        )
+        previous = row["configs"].get(config)
+        if previous is None or completed_at >= str(previous["completed_at"]):
+            row["configs"][config] = run
+    return sorted(
+        grouped.values(),
+        key=lambda row: (row["completed_at"], row["revision"]),
+        reverse=True,
+    )[:table_limit]
+
+
+def readme_result_cell(run: dict[str, Any] | None, concurrency: int) -> str:
+    if run is None:
+        return "—"
+    result = next(
+        (
+            item
+            for item in record_concurrency_results(run)
+            if int(item["concurrency"]) == concurrency
+        ),
+        None,
+    )
+    if result is None:
+        return "—"
+    if result.get("status") != "success":
+        return "**failed**"
+    throughput = display_metric(result.get("input_token_throughput"))
+    percentiles = "/".join(
+        display_metric(result.get(field))
+        for field in ("ttft_p50_ms", "ttft_p90_ms", "ttft_p99_ms")
+    )
+    return (
+        f"**{throughput} tok/s**<br>"
+        f"P50/P90/P99: {percentiles} ms"
+    )
+
+
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     if not runs:
         return "No semantic mixed-length benchmark runs have been recorded."
@@ -425,33 +485,26 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         ),
         "",
         (
-            "| Prefill mode | Dataset SHA-256 | vllm-torchtpu commit | "
-            "Test time (UTC) | C | Status | Input tok/s | Total tok/s | "
-            "TTFT P50 (ms) | TTFT P90 (ms) | TTFT P99 (ms) |"
+            "Each result cell shows **input tok/s** followed by "
+            "TTFT **P50/P90/P99** in milliseconds."
         ),
-        "| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+        "",
+        (
+            "| vllm-torchtpu commit | Test time (UTC) | "
+            "DP C8 | DP C64 | PCP C8 | PCP C64 |"
+        ),
+        "| --- | --- | --- | --- | --- | --- |",
     ]
-    for run in reversed(runs[-table_limit:]):
-        benchmark_config = normalize_benchmark_config(
-            run.get("benchmark_config"), legacy_default=True
-        )
-        dataset_sha256 = str(run.get("dataset_sha256", ""))
-        dataset_label = (
-            f"`{dataset_sha256[:12]}`" if dataset_sha256 else "unknown"
-        )
-        revision = str(run.get("torchtpu_vllm_revision", "unknown"))[:12]
-        for result in record_concurrency_results(run):
-            lines.append(
-                "| "
-                f"**{config_label(benchmark_config)}** | {dataset_label} | "
-                f"`{revision}` | {display_time(str(run['completed_at']))} | "
-                f"{int(result['concurrency'])} | {result.get('status', 'failed')} | "
-                f"{display_metric(result.get('input_token_throughput'))} | "
-                f"{display_metric(result.get('total_token_throughput'))} | "
-                f"{display_metric(result.get('ttft_p50_ms'))} | "
-                f"{display_metric(result.get('ttft_p90_ms'))} | "
-                f"{display_metric(result.get('ttft_p99_ms'))} |"
-            )
+    for row in readme_commit_rows(runs, table_limit):
+        revision = str(row["revision"])
+        revision_label = f"`{revision[:12]}`" if revision != "unknown" else "—"
+        cells = [revision_label, display_time(str(row["completed_at"]))]
+        for config in ("dp8", "pcp8"):
+            for concurrency in README_CONCURRENCIES:
+                cells.append(
+                    readme_result_cell(row["configs"].get(config), concurrency)
+                )
+        lines.append(f"| {' | '.join(cells)} |")
     lines.extend(
         [
             "",

@@ -79,10 +79,12 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertEqual(dp.returncode, 0, dp.stderr)
         self.assertIn("max sequences:           64", dp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", dp.stdout)
+        self.assertIn("skip padded MoE tokens:  1", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           8", pcp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
+        self.assertIn("skip padded MoE tokens:  1", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 
     def test_prefill_wrapper_config_ignores_inherited_config(self) -> None:

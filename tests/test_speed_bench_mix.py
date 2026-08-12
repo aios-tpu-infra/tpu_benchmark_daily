@@ -256,10 +256,11 @@ class SpeedBenchMixTest(unittest.TestCase):
         self.assertIn("SPEED_BENCH_REPORT_START", readme)
         self.assertIn("Real variable-length prefill benchmark", readme)
         self.assertIn(
-            "| vllm-torchtpu commit | Test time (UTC) | "
+            "| vllm-torchtpu commit | Dataset SHA-256 | Test time (UTC) | "
             "DP C8 | DP C64 | PCP C8 | PCP C64 |",
             readme,
         )
+        self.assertIn(f"| `{FIXTURE_DATASET_SHA256[:12]}` |", readme)
         self.assertIn("TTFT **P50/P90/P99**", readme)
         self.assertIn(
             "**17,289.43 tok/s**<br>"
@@ -345,8 +346,20 @@ class SpeedBenchMixTest(unittest.TestCase):
         row = next(line for line in block.splitlines() if line.startswith("| `aaaaaaaaaaaa`"))
 
         self.assertEqual(row.count(" tok/s**<br>P50/P90/P99:"), 4)
+        self.assertIn("| `bbbbbbbbbbbb` |", row)
         for value in ("100.00", "200.00", "300.00", "400.00"):
             self.assertIn(f"**{value} tok/s**", row)
+
+    def test_readme_labels_different_dp_and_pcp_dataset_hashes(self) -> None:
+        configs = {
+            "dp8": {"dataset_sha256": "a" * 64},
+            "pcp8": {"dataset_sha256": "b" * 64},
+        }
+
+        self.assertEqual(
+            UPDATE_REPORT.readme_dataset_cell(configs),
+            "DP8: `aaaaaaaaaaaa`<br>PCP8: `bbbbbbbbbbbb`",
+        )
 
 
 if __name__ == "__main__":

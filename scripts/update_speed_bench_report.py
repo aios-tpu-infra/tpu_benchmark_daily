@@ -441,6 +441,24 @@ def readme_result_cell(run: dict[str, Any] | None, concurrency: int) -> str:
     )
 
 
+def readme_dataset_cell(configs: dict[str, dict[str, Any]]) -> str:
+    hashes = {
+        config: str(run.get("dataset_sha256") or "")
+        for config, run in configs.items()
+        if run.get("dataset_sha256")
+    }
+    unique_hashes = set(hashes.values())
+    if not unique_hashes:
+        return "—"
+    if len(unique_hashes) == 1:
+        return f"`{next(iter(unique_hashes))[:12]}`"
+    return "<br>".join(
+        f"{config_label(config)}: `{hashes[config][:12]}`"
+        for config in ("dp8", "pcp8")
+        if config in hashes
+    )
+
+
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     if not runs:
         return "No semantic mixed-length benchmark runs have been recorded."
@@ -490,15 +508,19 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         ),
         "",
         (
-            "| vllm-torchtpu commit | Test time (UTC) | "
+            "| vllm-torchtpu commit | Dataset SHA-256 | Test time (UTC) | "
             "DP C8 | DP C64 | PCP C8 | PCP C64 |"
         ),
-        "| --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in readme_commit_rows(runs, table_limit):
         revision = str(row["revision"])
         revision_label = f"`{revision[:12]}`" if revision != "unknown" else "—"
-        cells = [revision_label, display_time(str(row["completed_at"]))]
+        cells = [
+            revision_label,
+            readme_dataset_cell(row["configs"]),
+            display_time(str(row["completed_at"])),
+        ]
         for config in ("dp8", "pcp8"):
             for concurrency in README_CONCURRENCIES:
                 cells.append(

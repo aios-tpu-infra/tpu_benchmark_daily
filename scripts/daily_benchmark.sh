@@ -498,6 +498,7 @@ fi
 if (( ! PREPARE_ONLY )); then
   if ! command -v vllm-service-launch >/dev/null 2>&1; then
     echo "ERROR: vllm-service-launch is not installed." >&2
+    echo "Install it with: sudo $PROJECT_ROOT/scripts/install_vllm_service_launcher.sh" >&2
     exit 1
   fi
   for service_id in \

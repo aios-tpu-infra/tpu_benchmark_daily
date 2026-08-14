@@ -40,3 +40,16 @@ ensure_uv_on_path() {
   echo "ERROR: uv is required by vllm-service-launch." >&2
   return 1
 }
+
+ensure_vllm_service_launcher() {
+  if command -v vllm-service-launch >/dev/null 2>&1; then
+    return
+  fi
+  local script_dir
+  local project_root
+  script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+  project_root=$(cd -- "$script_dir/.." && pwd)
+  echo "ERROR: vllm-service-launch is not installed." >&2
+  echo "Install it with: sudo $project_root/scripts/install_vllm_service_launcher.sh" >&2
+  return 1
+}

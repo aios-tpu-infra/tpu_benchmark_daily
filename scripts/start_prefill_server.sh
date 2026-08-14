@@ -360,6 +360,7 @@ write_launcher_env "$LAUNCH_ENV_FILE" \
   "${profile_env_keys[@]}"
 
 ensure_uv_on_path
+ensure_vllm_service_launcher
 
 exec vllm-service-launch start \
   --service-id "$SERVICE_ID" \

@@ -113,14 +113,17 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
 - `scripts/update_environment.sh`: updates `vllm-torchtpu`, installs its
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
+- `vendor/vllm-service-launch/`: repository-owned service launcher runtime,
+  systemd template, sudoers policy, and tmpfiles configuration.
+- `scripts/install_vllm_service_launcher.sh`: installs the vendored launcher
+  without requiring access to another source repository.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
 - `reports/`: durable peak-throughput history and generated SVG charts.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
 
-机器需要安装 `git`、`uv`、Google Cloud CLI、Python 3.12，以及
-`vllm-service-launch` 和对应的 systemd service。拉取 `vllm-torchtpu`
+机器需要安装 `git`、`uv`、Google Cloud CLI、Python 3.12 和 `sudo`。拉取 `vllm-torchtpu`
 submodule 需要 GitHub SSH 权限；当前 gcloud 用户必须具有私有 `torch-tpu`
 Artifact Registry 的读取权限。首次运行前先完成认证：
 
@@ -129,12 +132,10 @@ gcloud auth login
 gcloud auth list --filter=status:ACTIVE
 ```
 
-在 benchmark 主机安装 launcher：
+直接从本仓库在 benchmark 主机安装 launcher：
 
 ```bash
-sudo /path/to/tpu-misc/pd_disagg/observability/install.sh
-sudo systemd-tmpfiles --create vllm-metrics-targets.conf
-sudo systemctl daemon-reload
+sudo scripts/install_vllm_service_launcher.sh
 vllm-service-launch --help
 ```
 
@@ -315,7 +316,7 @@ Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 
 256 条请求按 `request_id % 8` 精确均分为每个 DP rank 32 条。请求直接并发
 提交，不使用服务端 admission barrier。客户端通过 `requests.post(json=...)`
 发起 streaming 请求，并从 cumulative `usage.completion_tokens` 展开 token
-时间线，与当前 tpu-misc C256 记录使用相同计数口径。
+时间线。
 
 若 256 条请求没有形成完整 10 秒重叠区间，各轮
 `run_<N>/summary.json` 中的 `active_requests_max` 和

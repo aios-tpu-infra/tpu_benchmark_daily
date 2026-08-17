@@ -268,40 +268,72 @@ write_launcher_env "$LAUNCH_ENV_FILE" \
   TEMP \
   PYTHONUNBUFFERED
 
-ensure_uv_on_path
-ensure_vllm_service_launcher
+USE_VLLM_SERVICE_LAUNCHER="${USE_VLLM_SERVICE_LAUNCHER:-${USE_SERVICE_LAUNCHER:-1}}"
 
-exec vllm-service-launch start \
-  --service-id "$SERVICE_ID" \
-  --role "$ROLE" \
-  --model-alias "$SERVED_MODEL_NAME" \
-  --uv-project "$PROJECT_ROOT" \
-  --env-file "$LAUNCH_ENV_FILE" \
-  --working-directory "$PROJECT_ROOT" \
-  --host "$HOST" \
-  --port "$PORT" \
-  -- serve "$MODEL_DIR" \
-  --served-model-name "$SERVED_MODEL_NAME" \
-  --trust-remote-code \
-  --seed 42 \
-  --tensor-parallel-size 1 \
-  --data-parallel-size 8 \
-  --data-parallel-size-local 8 \
-  --enable-expert-parallel \
-  --language-model-only \
-  --mamba-cache-mode align \
-  --no-disable-hybrid-kv-cache-manager \
-  --kv-cache-dtype fp8 \
-  --max-model-len "$MAX_MODEL_LEN" \
-  --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
-  --max-num-seqs "$MAX_NUM_SEQS" \
-  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  --async-scheduling \
-  --enable-prompt-tokens-details \
-  --disable-log-stats \
-  --no-enable-log-requests \
-  --no-enable-prefix-caching \
-  --attention-backend CUSTOM \
-  --limit-mm-per-prompt '{"image":0,"video":0}' \
-  --compilation-config "$COMPILATION_CONFIG" \
-  "$@"
+if [[ "$USE_VLLM_SERVICE_LAUNCHER" == "1" || "$USE_VLLM_SERVICE_LAUNCHER" == "true" ]]; then
+  ensure_uv_on_path
+  ensure_vllm_service_launcher
+
+  exec vllm-service-launch start \
+    --service-id "$SERVICE_ID" \
+    --role "$ROLE" \
+    --model-alias "$SERVED_MODEL_NAME" \
+    --uv-project "$PROJECT_ROOT" \
+    --env-file "$LAUNCH_ENV_FILE" \
+    --working-directory "$PROJECT_ROOT" \
+    --host "$HOST" \
+    --port "$PORT" \
+    -- serve "$MODEL_DIR" \
+    --served-model-name "$SERVED_MODEL_NAME" \
+    --trust-remote-code \
+    --seed 42 \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 8 \
+    --data-parallel-size-local 8 \
+    --enable-expert-parallel \
+    --language-model-only \
+    --mamba-cache-mode align \
+    --no-disable-hybrid-kv-cache-manager \
+    --kv-cache-dtype fp8 \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    --max-num-seqs "$MAX_NUM_SEQS" \
+    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+    --async-scheduling \
+    --enable-prompt-tokens-details \
+    --disable-log-stats \
+    --no-enable-log-requests \
+    --no-enable-prefix-caching \
+    --attention-backend CUSTOM \
+    --limit-mm-per-prompt '{"image":0,"video":0}' \
+    --compilation-config "$COMPILATION_CONFIG" \
+    "$@"
+else
+  exec vllm serve "$MODEL_DIR" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --served-model-name "$SERVED_MODEL_NAME" \
+    --trust-remote-code \
+    --seed 42 \
+    --tensor-parallel-size 1 \
+    --data-parallel-size 8 \
+    --data-parallel-size-local 8 \
+    --enable-expert-parallel \
+    --language-model-only \
+    --mamba-cache-mode align \
+    --no-disable-hybrid-kv-cache-manager \
+    --kv-cache-dtype fp8 \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    --max-num-seqs "$MAX_NUM_SEQS" \
+    --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+    --async-scheduling \
+    --enable-prompt-tokens-details \
+    --disable-log-stats \
+    --no-enable-log-requests \
+    --no-enable-prefix-caching \
+    --attention-backend CUSTOM \
+    --limit-mm-per-prompt '{"image":0,"video":0}' \
+    --compilation-config "$COMPILATION_CONFIG" \
+    "$@"
+fi

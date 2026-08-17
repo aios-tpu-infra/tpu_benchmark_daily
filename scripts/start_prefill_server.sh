@@ -359,39 +359,70 @@ write_launcher_env "$LAUNCH_ENV_FILE" \
   PYTHONUNBUFFERED \
   "${profile_env_keys[@]}"
 
-ensure_uv_on_path
-ensure_vllm_service_launcher
+USE_VLLM_SERVICE_LAUNCHER="${USE_VLLM_SERVICE_LAUNCHER:-${USE_SERVICE_LAUNCHER:-1}}"
 
-exec vllm-service-launch start \
-  --service-id "$SERVICE_ID" \
-  --role "$ROLE" \
-  --model-alias "$SERVED_MODEL_NAME" \
-  --uv-project "$PROJECT_ROOT" \
-  --env-file "$LAUNCH_ENV_FILE" \
-  --working-directory "$PROJECT_ROOT" \
-  --host "$HOST" \
-  --port "$PORT" \
-  -- serve "$MODEL_DIR" \
-  --served-model-name "$SERVED_MODEL_NAME" \
-  --generation-config vllm \
-  --seed 42 \
-  --max-model-len "$MAX_MODEL_LEN" \
-  --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
-  "${long_prefill_args[@]}" \
-  --max-num-seqs "$MAX_NUM_SEQS" \
-  --data-parallel-size "$DATA_PARALLEL_SIZE" \
-  --attention-backend CUSTOM \
-  --gpu-memory-utilization 0.90 \
-  --kv-cache-dtype fp8 \
-  --language-model-only \
-  --enable-expert-parallel \
-  --disable-custom-all-reduce \
-  --no-enable-prefix-caching \
-  --prefill-context-parallel-size "$PREFILL_CONTEXT_PARALLEL_SIZE" \
-  --cp-kv-cache-interleave-size 256 \
-  --no-disable-hybrid-kv-cache-manager \
-  --tensor-parallel-size 1 \
-  --return-tokens-as-token-ids \
-  --compilation-config "$COMPILATION_CONFIG" \
-  "${profile_args[@]}" \
-  "${server_args[@]}"
+if [[ "$USE_VLLM_SERVICE_LAUNCHER" == "1" || "$USE_VLLM_SERVICE_LAUNCHER" == "true" ]]; then
+  ensure_uv_on_path
+  ensure_vllm_service_launcher
+
+  exec vllm-service-launch start \
+    --service-id "$SERVICE_ID" \
+    --role "$ROLE" \
+    --model-alias "$SERVED_MODEL_NAME" \
+    --uv-project "$PROJECT_ROOT" \
+    --env-file "$LAUNCH_ENV_FILE" \
+    --working-directory "$PROJECT_ROOT" \
+    --host "$HOST" \
+    --port "$PORT" \
+    -- serve "$MODEL_DIR" \
+    --served-model-name "$SERVED_MODEL_NAME" \
+    --generation-config vllm \
+    --seed 42 \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    "${long_prefill_args[@]}" \
+    --max-num-seqs "$MAX_NUM_SEQS" \
+    --data-parallel-size "$DATA_PARALLEL_SIZE" \
+    --attention-backend CUSTOM \
+    --gpu-memory-utilization 0.90 \
+    --kv-cache-dtype fp8 \
+    --language-model-only \
+    --enable-expert-parallel \
+    --disable-custom-all-reduce \
+    --no-enable-prefix-caching \
+    --prefill-context-parallel-size "$PREFILL_CONTEXT_PARALLEL_SIZE" \
+    --cp-kv-cache-interleave-size 256 \
+    --no-disable-hybrid-kv-cache-manager \
+    --tensor-parallel-size 1 \
+    --return-tokens-as-token-ids \
+    --compilation-config "$COMPILATION_CONFIG" \
+    "${profile_args[@]}" \
+    "${server_args[@]}"
+else
+  exec vllm serve "$MODEL_DIR" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --served-model-name "$SERVED_MODEL_NAME" \
+    --generation-config vllm \
+    --seed 42 \
+    --max-model-len "$MAX_MODEL_LEN" \
+    --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
+    "${long_prefill_args[@]}" \
+    --max-num-seqs "$MAX_NUM_SEQS" \
+    --data-parallel-size "$DATA_PARALLEL_SIZE" \
+    --attention-backend CUSTOM \
+    --gpu-memory-utilization 0.90 \
+    --kv-cache-dtype fp8 \
+    --language-model-only \
+    --enable-expert-parallel \
+    --disable-custom-all-reduce \
+    --no-enable-prefix-caching \
+    --prefill-context-parallel-size "$PREFILL_CONTEXT_PARALLEL_SIZE" \
+    --cp-kv-cache-interleave-size 256 \
+    --no-disable-hybrid-kv-cache-manager \
+    --tensor-parallel-size 1 \
+    --return-tokens-as-token-ids \
+    --compilation-config "$COMPILATION_CONFIG" \
+    "${profile_args[@]}" \
+    "${server_args[@]}"
+fi

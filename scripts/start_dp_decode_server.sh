@@ -21,6 +21,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.932285943}"
 COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4352,4384}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
+RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"
 TPU_PARALLEL_PRECOMPILE="${TPU_PARALLEL_PRECOMPILE:-1}"
 
 require_uint() {
@@ -42,6 +43,10 @@ for value_name in \
 done
 if [[ ! "$GPU_MEMORY_UTILIZATION" =~ ^0\.[0-9]+$ ]]; then
   echo "ERROR: GPU_MEMORY_UTILIZATION must be between 0 and 1." >&2
+  exit 2
+fi
+if [[ "$RESET_COMPILE_CACHE" != 0 && "$RESET_COMPILE_CACHE" != 1 ]]; then
+  echo "ERROR: RESET_COMPILE_CACHE must be 0 or 1." >&2
   exit 2
 fi
 case "${TPU_PARALLEL_PRECOMPILE,,}" in
@@ -125,10 +130,11 @@ export LIBTPU_INIT_ARGS="${LIBTPU_INIT_ARGS:-$DEFAULT_LIBTPU_INIT_ARGS}"
 unset TPU_XPROF_DEVICE_COUNTERS
 unset VLLM_TORCH_PROFILER_DIR
 
-# Keep every configurable compilation cache on project storage and start each
-# server with an empty cache to avoid unbounded growth. Also remove the legacy
-# TorchInductor cache under /tmp, where older launches may have left large
-# AOTAutograd artifacts.
+# Keep every configurable compilation cache on project storage. By default the
+# shared root is cleared before startup to avoid unbounded growth; set
+# RESET_COMPILE_CACHE=0 for deliberate reuse while validating a fixed revision.
+# Also remove the legacy TorchInductor cache under /tmp, where older launches
+# may have left large AOTAutograd artifacts.
 LEGACY_TORCHINDUCTOR_CACHE="/tmp/torchinductor_$(id -un)"
 case "$LEGACY_TORCHINDUCTOR_CACHE" in
   /tmp/torchinductor_*) ;;
@@ -167,7 +173,12 @@ if [[ -L "$COMPILE_CACHE_ROOT" ]] ||
   exit 1
 fi
 mkdir -p "$COMPILE_CACHE_ROOT"
-find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
+if (( RESET_COMPILE_CACHE )); then
+  find "$COMPILE_CACHE_ROOT" -mindepth 1 -delete
+  COMPILE_CACHE_ACTION=cleared
+else
+  COMPILE_CACHE_ACTION=retained
+fi
 
 # Keep runtime temporary files on the project's data filesystem as well. This
 # path intentionally lives at the mount root so ZMQ's IPC endpoint remains
@@ -230,7 +241,7 @@ echo "benchmark config:        dp8_decode_c256"
 echo "parallelism:             TP=1, DP=8, EP=8"
 echo "compile sizes:           $COMPILE_SIZES"
 echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
-echo "compile cache:           $COMPILE_CACHE_ROOT (cleared before startup)"
+echo "compile cache:           $COMPILE_CACHE_ROOT ($COMPILE_CACHE_ACTION before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path:  $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache:   disabled (no /dev/shm dependency)"

@@ -111,6 +111,32 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("RESET_COMPILE_CACHE must be 0 or 1", result.stderr)
 
+    def test_decode_server_validates_cache_reset_toggle(self) -> None:
+        result = self.run_script(
+            "start_dp_decode_server.sh",
+            environment={"RESET_COMPILE_CACHE": "invalid"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("RESET_COMPILE_CACHE must be 0 or 1", result.stderr)
+
+    def test_all_server_configs_support_cache_retention(self) -> None:
+        for script_name in (
+            "start_dp_decode_server.sh",
+            "start_prefill_server.sh",
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    'RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"',
+                    script,
+                )
+                self.assertIn("if (( RESET_COMPILE_CACHE )); then", script)
+                self.assertIn("COMPILE_CACHE_ACTION=cleared", script)
+                self.assertIn("COMPILE_CACHE_ACTION=retained", script)
+
     def test_prefill_server_validates_parallel_precompile_toggle(self) -> None:
         disabled = self.run_script(
             "start_prefill_server.sh",

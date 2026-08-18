@@ -21,6 +21,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.932285943}"
 COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4352,4384}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
+TPU_PARALLEL_PRECOMPILE="${TPU_PARALLEL_PRECOMPILE:-1}"
 
 require_uint() {
   local name=$1
@@ -43,6 +44,14 @@ if [[ ! "$GPU_MEMORY_UTILIZATION" =~ ^0\.[0-9]+$ ]]; then
   echo "ERROR: GPU_MEMORY_UTILIZATION must be between 0 and 1." >&2
   exit 2
 fi
+case "${TPU_PARALLEL_PRECOMPILE,,}" in
+  1|true) TPU_PARALLEL_PRECOMPILE=1 ;;
+  0|false) TPU_PARALLEL_PRECOMPILE=0 ;;
+  *)
+    echo "ERROR: TPU_PARALLEL_PRECOMPILE must be a boolean, got '$TPU_PARALLEL_PRECOMPILE'." >&2
+    exit 2
+    ;;
+esac
 
 if [[ ! -x "$VENV_DIR/bin/python" || ! -x "$VENV_DIR/bin/vllm" ]]; then
   echo "ERROR: project environment is incomplete: $VENV_DIR" >&2
@@ -90,6 +99,7 @@ export VLLM_ALLOW_LONG_MAX_MODEL_LEN=1
 # TorchTPU split compiler artifacts are not serializable.
 export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
 export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
+export TPU_PARALLEL_PRECOMPILE
 export RAY_memory_monitor_refresh_ms=0
 
 export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
@@ -219,6 +229,7 @@ echo "torch_tpu version:       $TORCH_TPU_VERSION"
 echo "benchmark config:        dp8_decode_c256"
 echo "parallelism:             TP=1, DP=8, EP=8"
 echo "compile sizes:           $COMPILE_SIZES"
+echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
 echo "compile cache:           $COMPILE_CACHE_ROOT (cleared before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path:  $RUNTIME_TMP_ROOT (cleared before startup)"
@@ -243,6 +254,7 @@ write_launcher_env "$LAUNCH_ENV_FILE" \
   VLLM_ALLOW_LONG_MAX_MODEL_LEN \
   VLLM_DISABLE_COMPILE_CACHE \
   TORCHINDUCTOR_AUTOGRAD_CACHE \
+  TPU_PARALLEL_PRECOMPILE \
   RAY_memory_monitor_refresh_ms \
   TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL \
   TPU_KV_CACHE_HEADROOM_MIB \

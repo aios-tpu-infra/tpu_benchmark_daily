@@ -56,6 +56,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     "compile sizes:           512,1024,2048,4096",
                     result.stdout,
                 )
+                self.assertIn("parallel precompile:     1", result.stdout)
 
     def test_prefill_server_requires_a_known_config(self) -> None:
         missing = self.run_script("start_prefill_server.sh", "--test-only")
@@ -110,6 +111,30 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("RESET_COMPILE_CACHE must be 0 or 1", result.stderr)
 
+    def test_prefill_server_validates_parallel_precompile_toggle(self) -> None:
+        disabled = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={"TPU_PARALLEL_PRECOMPILE": "false"},
+        )
+        invalid = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={"TPU_PARALLEL_PRECOMPILE": "invalid"},
+        )
+
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        self.assertIn("parallel precompile:     0", disabled.stdout)
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn(
+            "TPU_PARALLEL_PRECOMPILE must be a boolean",
+            invalid.stderr,
+        )
+
     def test_prefill_wrappers_only_select_the_config(self) -> None:
         for script_name, config in (
             ("start_dp_server.sh", "dp8"),
@@ -138,6 +163,25 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     script,
                 )
                 self.assertNotIn("--block-size", script)
+
+    def test_all_server_configs_enable_parallel_precompile(self) -> None:
+        for script_name in (
+            "start_dp_decode_server.sh",
+            "start_prefill_server.sh",
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    'TPU_PARALLEL_PRECOMPILE="${TPU_PARALLEL_PRECOMPILE:-1}"',
+                    script,
+                )
+                self.assertIn("export TPU_PARALLEL_PRECOMPILE", script)
+                launcher_environment = script.split(
+                    'write_launcher_env "$LAUNCH_ENV_FILE"', 1
+                )[1]
+                self.assertIn("TPU_PARALLEL_PRECOMPILE", launcher_environment)
 
     def test_throughput_test_only_accepts_flag_before_run_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

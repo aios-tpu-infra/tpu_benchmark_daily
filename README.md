@@ -170,6 +170,11 @@ The remaining dependencies are then synchronized with `uv`.
 scripts/daily_benchmark.sh
 ```
 
+All benchmark server configurations enable vLLM-TorchTPU's eight-rank bucket
+precompile rotation by default to reduce cold-start compilation time. Set
+`TPU_PARALLEL_PRECOMPILE=0` on the benchmark command to disable it for a
+comparison run.
+
 By default the runner tests the latest commit on `vllm-torchtpu/main`. To test
 an exact commit instead, pass its Git commit ID:
 

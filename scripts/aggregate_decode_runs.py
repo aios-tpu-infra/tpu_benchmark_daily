@@ -205,11 +205,16 @@ def aggregate_result_root(result_root: Path, runs: int) -> dict[str, Any]:
         field: distribution([float(row[field]) for row in run_rows])
         for field in AGGREGATE_FIELDS
     }
+    client_processes = (
+        "one independent client process"
+        if runs == 1
+        else f"{runs} independent client processes"
+    )
     return {
         "schema_version": 1,
         "result_root": str(result_root),
         "protocol": (
-            "C256/P65536/D1024; three independent client processes; "
+            f"C256/P65536/D1024; {client_processes}; "
             "distinct prompt and cache_salt per request; request_id % 8 "
             "DP-rank routing; no admission barrier"
         ),
@@ -259,7 +264,7 @@ def parse_args() -> argparse.Namespace:
         description="Aggregate independent C256 decode benchmark processes."
     )
     parser.add_argument("--result-root", type=Path, required=True)
-    parser.add_argument("--runs", type=positive_int, default=3)
+    parser.add_argument("--runs", type=positive_int, default=1)
     return parser.parse_args()
 
 

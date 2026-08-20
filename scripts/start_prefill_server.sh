@@ -83,6 +83,7 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
 RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"
 TPU_PARALLEL_PRECOMPILE="${TPU_PARALLEL_PRECOMPILE:-1}"
+TPU_PREMAPPED_BUFFER_SIZE="${TPU_PREMAPPED_BUFFER_SIZE:-17179869184}"
 
 require_uint() {
   local name=$1
@@ -97,6 +98,7 @@ require_uint PORT "$PORT"
 require_uint MAX_MODEL_LEN "$MAX_MODEL_LEN"
 require_uint MAX_NUM_BATCHED_TOKENS "$MAX_NUM_BATCHED_TOKENS"
 require_uint MAX_NUM_SEQS "$MAX_NUM_SEQS"
+require_uint TPU_PREMAPPED_BUFFER_SIZE "$TPU_PREMAPPED_BUFFER_SIZE"
 if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
   require_uint LONG_PREFILL_TOKEN_THRESHOLD "$LONG_PREFILL_TOKEN_THRESHOLD"
 fi
@@ -134,6 +136,7 @@ if (( TEST_ONLY )); then
   echo "max sequences:           $MAX_NUM_SEQS"
   echo "compile sizes:           $COMPILE_SIZES"
   echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
+  echo "premapped buffer size:   $TPU_PREMAPPED_BUFFER_SIZE"
   echo "skip padded MoE tokens:  $TPU_MOE_SKIP_PADDED_TOKENS"
   if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
     echo "long prefill threshold:  $LONG_PREFILL_TOKEN_THRESHOLD"
@@ -189,6 +192,7 @@ export SKIP_JAX_PRECOMPILE=1
 export VLLM_DISABLE_COMPILE_CACHE="${VLLM_DISABLE_COMPILE_CACHE:-1}"
 export TORCHINDUCTOR_AUTOGRAD_CACHE="${TORCHINDUCTOR_AUTOGRAD_CACHE:-0}"
 export TPU_PARALLEL_PRECOMPILE
+export TPU_PREMAPPED_BUFFER_SIZE
 export RAY_memory_monitor_refresh_ms=0
 export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
@@ -334,6 +338,7 @@ echo "benchmark config:        $BENCHMARK_CONFIG"
 echo "parallelism:             DP=$DATA_PARALLEL_SIZE, PCP=$PREFILL_CONTEXT_PARALLEL_SIZE, TP=1"
 echo "compile sizes: $COMPILE_SIZES"
 echo "parallel precompile: $TPU_PARALLEL_PRECOMPILE"
+echo "premapped buffer size: $TPU_PREMAPPED_BUFFER_SIZE"
 echo "compile cache: $COMPILE_CACHE_ROOT ($COMPILE_CACHE_ACTION before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
@@ -353,6 +358,7 @@ write_launcher_env "$LAUNCH_ENV_FILE" \
   VLLM_DISABLE_COMPILE_CACHE \
   TORCHINDUCTOR_AUTOGRAD_CACHE \
   TPU_PARALLEL_PRECOMPILE \
+  TPU_PREMAPPED_BUFFER_SIZE \
   RAY_memory_monitor_refresh_ms \
   TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL \
   TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG \

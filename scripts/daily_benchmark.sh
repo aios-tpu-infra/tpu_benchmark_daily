@@ -734,7 +734,7 @@ run_decode_round() {
   local run_index=$2
   local run_dir="$result_dir/run_${run_index}"
 
-  echo "Running real-weight DP8 C256 decode round $run_index/3..."
+  echo "Running real-weight DP8 C256 decode round $run_index/1..."
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
     --base-url "http://127.0.0.1:$PORT" \
     --model Qwen3.5-397B-A17B-FP8 \
@@ -753,20 +753,17 @@ run_decode_round() {
 
 run_decode_benchmark() {
   local result_dir="$RUN_DIR/results/dp8_decode_c256"
-  local run_index
 
   mkdir -p "$result_dir"
   if ! run_decode_smoke "$result_dir"; then
     return 1
   fi
-  for run_index in 1 2 3; do
-    if ! run_decode_round "$result_dir" "$run_index"; then
-      return 1
-    fi
-  done
+  if ! run_decode_round "$result_dir" 1; then
+    return 1
+  fi
   if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/aggregate_decode_runs.py" \
       --result-root "$result_dir" \
-      --runs 3; then
+      --runs 1; then
     return 1
   fi
 

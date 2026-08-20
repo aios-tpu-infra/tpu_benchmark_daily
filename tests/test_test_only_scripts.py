@@ -209,6 +209,43 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 )[1]
                 self.assertIn("TPU_PARALLEL_PRECOMPILE", launcher_environment)
 
+    def test_all_server_configs_set_premapped_buffer_size(self) -> None:
+        for script_name in (
+            "start_dp_decode_server.sh",
+            "start_prefill_server.sh",
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    'TPU_PREMAPPED_BUFFER_SIZE="${TPU_PREMAPPED_BUFFER_SIZE:-17179869184}"',
+                    script,
+                )
+                self.assertIn("export TPU_PREMAPPED_BUFFER_SIZE", script)
+                launcher_environment = script.split(
+                    'write_launcher_env "$LAUNCH_ENV_FILE"', 1
+                )[1]
+                self.assertIn(
+                    "TPU_PREMAPPED_BUFFER_SIZE", launcher_environment
+                )
+
+    def test_decode_server_uses_4096_token_chunk_and_compile_bucket(self) -> None:
+        script = (
+            PROJECT_ROOT / "scripts" / "start_dp_decode_server.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"',
+            script,
+        )
+        self.assertIn(
+            'COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4096}"',
+            script,
+        )
+        self.assertNotIn("4352", script)
+        self.assertNotIn("4384", script)
+
     def test_throughput_test_only_accepts_flag_before_run_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             result = self.run_script(
@@ -252,14 +289,25 @@ class TestOnlyScriptsTest(unittest.TestCase):
             summary = json.loads(
                 (result_dir / "summary.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(summary["benchmark"]["samples_per_length"], 16)
+            self.assertIsNone(summary["benchmark"]["samples_per_length"])
             self.assertEqual(
-                {item["completed"] for item in summary["results"]},
-                {16},
+                summary["benchmark"]["samples_by_input_length"],
+                {
+                    "8192": 16,
+                    "16384": 16,
+                    "32768": 16,
+                    "65536": 4,
+                    "131072": 4,
+                    "258048": 4,
+                },
             )
             self.assertEqual(
-                {len(item["raw_ttft_ms"]) for item in summary["results"]},
-                {16},
+                [item["completed"] for item in summary["results"]],
+                [16, 16, 16, 4, 4, 4],
+            )
+            self.assertEqual(
+                [len(item["raw_ttft_ms"]) for item in summary["results"]],
+                [16, 16, 16, 4, 4, 4],
             )
 
     def test_ttft_test_only_can_inject_one_failed_length(self) -> None:
@@ -289,7 +337,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
             failed = summary["results"][-1]
             self.assertEqual(failed["status"], "failed")
             self.assertEqual(failed["completed"], 0)
-            self.assertEqual(failed["failed"], 16)
+            self.assertEqual(failed["failed"], 4)
             self.assertIsNone(failed["ttft_ms"])
 
     def test_speed_bench_mix_test_only_replays_default_concurrencies(self) -> None:

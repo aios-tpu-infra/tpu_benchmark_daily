@@ -4,10 +4,10 @@
 
 本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 真实权重 benchmark：
 TP1/DP8/EP8 C256 decode、DP8 prefill 和 PCP8 prefill。Decode 使用
-C256/P65536/D1024、独立请求前缀、三轮 10 秒滑窗，按实际 peak-active
+C256/P65536/D1024、独立请求前缀、一轮 10 秒滑窗，按实际 peak-active
 plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入长度
-8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；每档串行执行
-16 条 measured requests，并展示 median TTFT。
+8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；8K/16K/32K 每档串行执行
+16 条 measured requests，64K/128K/252K 每档执行 4 条，并展示 median TTFT。
 
 DP8 和 PCP8 prefill 还会额外运行一组固定的真实语义变长请求：从公开的 NVIDIA
 SPEED-Bench 快照的 4,194 条有效请求中，以 seed 42 全局随机选取 1,000 条；
@@ -104,8 +104,9 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
   wrappers that select the corresponding configuration in the shared launcher.
 - `scripts/bench_all.sh`: benchmarks input length 8192 at concurrency 8–256 for
   the configuration selected by `BENCHMARK_CONFIG`.
-- `scripts/bench_prefill_ttft.sh`: benchmarks 16 serial requests at concurrency
-  1 for each input length from 8K–252K and writes an independent TTFT summary.
+- `scripts/bench_prefill_ttft.sh`: benchmarks serial requests at concurrency 1
+  for each input length from 8K–252K (16 samples for 8K–32K and 4 for
+  64K–252K) and writes an independent TTFT summary.
 - `scripts/prepare_speed_bench_mix.py`: deterministically builds the checked-in
   1,000-request semantic mixed-length dataset from a raw SPEED-Bench snapshot.
 - `scripts/bench_speed_bench_mix.sh`: runs the DP8/PCP8 semantic mixed-length
@@ -304,7 +305,8 @@ therefore contains three benchmark groups: DP8 C256 decode, DP8 prefill, and
 PCP8 prefill. Each group is isolated so a startup or benchmark failure is
 recorded before the runner advances to the next group. The two prefill services
 run their existing 8K concurrency sweep first and their single-request TTFT
-sweep second, using 16 serial measured requests per input length. Servers are
+sweep second, using 16 serial measured requests for 8K–32K and 4 for
+64K–252K. Servers are
 stopped after the benchmark by default.
 Use `--keep-server-running` only for interactive debugging; when successful,
 it keeps the final PCP8 server alive.
@@ -328,14 +330,13 @@ Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 
 `run_<N>/summary.json` 中的 `active_requests_max` 和
 `timeline_valid_full_concurrency_decode` 会记录实际峰值并发，主吞吐取该峰值
 并发平台窗口的 P50；主 TPOT 统计相同 peak-active 时间范围内的 token 间隔，
-逐请求全生命周期 TPOT 作为补充。三轮结果均为独立 Python 进程，最终
-`aggregate.json`/`aggregate.csv` 对每轮指标计算 `count`、`avg`、`min`、
-`max`、sample `stddev`、`p90` 和 `p99`；daily 报告使用三轮
-peak-active window throughput P50 的平均值，以及三轮 peak-active TPOT P50
-的平均值。
+逐请求全生命周期 TPOT 作为补充。正式结果由一个独立 Python 进程生成，最终
+`aggregate.json`/`aggregate.csv` 对该轮指标记录 `count`、`avg`、`min`、
+`max`、sample `stddev`、`p90` 和 `p99`；daily 报告使用该轮的
+peak-active window throughput P50 和 peak-active TPOT P50。
 
 三组测试的结果使用同级目录；两个 prefill 目录在根部提供 `summary.json`，
-decode 目录保存 smoke、三轮独立 summary 及跨轮 aggregate：
+decode 目录保存 smoke、正式测试 summary 及 aggregate：
 
 ```text
 runs/<UTC timestamp>/results/
@@ -347,10 +348,6 @@ runs/<UTC timestamp>/results/
 │   │   ├── timeline.csv
 │   │   ├── request_tpot.csv
 │   │   └── raw_requests.jsonl
-│   ├── run_2/
-│   │   └── ...
-│   ├── run_3/
-│   │   └── ...
 │   ├── aggregate.json
 │   └── aggregate.csv
 ├── dp8/

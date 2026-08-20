@@ -749,7 +749,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefill-tokens", type=positive_int, default=65536)
     parser.add_argument("--decode-tokens", type=positive_int, default=1024)
     parser.add_argument("--tokenizer-dir", type=Path, required=True)
-    parser.add_argument("--rounds", type=positive_int, default=3)
+    parser.add_argument("--rounds", type=positive_int, default=1)
     parser.add_argument("--cache-salt-prefix", default="")
     parser.add_argument("--window-seconds", type=positive_float, default=10.0)
     parser.add_argument("--step-seconds", type=positive_float, default=1.0)

@@ -50,8 +50,23 @@ def aggregate(
     expected_input_lengths: list[int],
     output_length: int,
     samples_per_length: int,
+    samples_by_length: dict[int, int] | None = None,
 ) -> dict[str, Any]:
     expected = set(expected_input_lengths)
+    unexpected_sample_lengths = set(samples_by_length or {}) - expected
+    if unexpected_sample_lengths:
+        raise ValueError(
+            "sample counts provided for unexpected input lengths: "
+            f"{sorted(unexpected_sample_lengths)}"
+        )
+    sample_counts = {
+        input_length: (samples_by_length or {}).get(
+            input_length, samples_per_length
+        )
+        for input_length in expected_input_lengths
+    }
+    if any(value <= 0 for value in sample_counts.values()):
+        raise ValueError("sample counts must be positive")
     records: dict[int, dict[str, Any]] = {}
     paths_by_length: dict[int, Path] = {}
 
@@ -69,6 +84,7 @@ def aggregate(
         paths_by_length[nominal_input_length] = path
 
     for nominal_input_length in expected_input_lengths:
+        expected_samples = sample_counts[nominal_input_length]
         path = paths_by_length.get(nominal_input_length)
         if path is None:
             records[nominal_input_length] = {
@@ -81,7 +97,7 @@ def aggregate(
                 "output_length": output_length,
                 "status": "failed",
                 "completed": 0,
-                "failed": samples_per_length,
+                "failed": expected_samples,
                 "ttft_ms": None,
                 "mean_ttft_ms": None,
                 "median_ttft_ms": None,
@@ -95,7 +111,7 @@ def aggregate(
         data = load_json(path)
         completed = int(data.get("completed", 0))
         failed = int(data.get("failed", 0))
-        if completed != samples_per_length or failed != 0:
+        if completed != expected_samples or failed != 0:
             errors = data.get("errors")
             error_messages = (
                 list(
@@ -113,7 +129,7 @@ def aggregate(
                 "output_length": output_length,
                 "status": "failed",
                 "completed": completed,
-                "failed": failed or max(samples_per_length - completed, 1),
+                "failed": failed or max(expected_samples - completed, 1),
                 "ttft_ms": None,
                 "mean_ttft_ms": None,
                 "median_ttft_ms": None,
@@ -123,11 +139,11 @@ def aggregate(
                 "error": "; ".join(error_messages)
                 or (
                     f"completed={completed}, failed={failed}; expected "
-                    f"completed={samples_per_length}, failed=0"
+                    f"completed={expected_samples}, failed=0"
                 ),
             }
             continue
-        if int(data.get("num_prompts", 0)) != samples_per_length:
+        if int(data.get("num_prompts", 0)) != expected_samples:
             raise ValueError(f"unexpected num_prompts in {path}")
         if int(data.get("max_concurrency", 0)) != 1:
             raise ValueError(
@@ -139,17 +155,17 @@ def aggregate(
         ttfts = data.get("ttfts")
         if (
             not isinstance(input_lens, list)
-            or len(input_lens) != samples_per_length
+            or len(input_lens) != expected_samples
             or {int(value) for value in input_lens} != {nominal_input_length}
         ):
             raise ValueError(f"unexpected input_lens in {path}: {input_lens!r}")
         if (
             not isinstance(output_lens, list)
-            or len(output_lens) != samples_per_length
+            or len(output_lens) != expected_samples
             or {int(value) for value in output_lens} != {output_length}
         ):
             raise ValueError(f"unexpected output_lens in {path}: {output_lens!r}")
-        if not isinstance(ttfts, list) or len(ttfts) != samples_per_length:
+        if not isinstance(ttfts, list) or len(ttfts) != expected_samples:
             raise ValueError(f"unexpected ttfts in {path}: {ttfts!r}")
         raw_ttft_ms = [
             finite_float(value, "ttfts", path) * 1000.0 for value in ttfts
@@ -203,15 +219,23 @@ def aggregate(
     else:
         status = "failed"
 
+    unique_sample_counts = set(sample_counts.values())
+    uniform_samples = (
+        unique_sample_counts.pop() if len(unique_sample_counts) == 1 else None
+    )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": status,
         "benchmark": {
             "benchmark_config": benchmark_config,
             "concurrency": 1,
             "input_lengths": expected_input_lengths,
             "output_length": output_length,
-            "samples_per_length": samples_per_length,
+            "samples_per_length": uniform_samples,
+            "samples_by_input_length": {
+                str(input_length): sample_counts[input_length]
+                for input_length in expected_input_lengths
+            },
             "statistic": "median_ttft_ms",
         },
         "successful_input_lengths": successful_lengths,
@@ -229,17 +253,46 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-length", type=positive_int, default=1)
     parser.add_argument("--samples-per-length", type=positive_int, default=1)
+    parser.add_argument(
+        "--samples-by-length",
+        action="append",
+        default=[],
+        metavar="INPUT_LENGTH=SAMPLES",
+    )
     return parser.parse_args()
+
+
+def parse_samples_by_length(values: list[str]) -> dict[int, int]:
+    parsed: dict[int, int] = {}
+    for value in values:
+        raw_length, separator, raw_samples = value.partition("=")
+        if not separator:
+            raise ValueError(
+                f"invalid --samples-by-length value {value!r}; expected LENGTH=SAMPLES"
+            )
+        input_length = positive_int(raw_length)
+        samples = positive_int(raw_samples)
+        if input_length in parsed:
+            raise ValueError(
+                f"duplicate --samples-by-length input length: {input_length}"
+            )
+        parsed[input_length] = samples
+    return parsed
 
 
 def main() -> None:
     args = parse_args()
+    try:
+        samples_by_length = parse_samples_by_length(args.samples_by_length)
+    except (ValueError, argparse.ArgumentTypeError) as exc:
+        raise SystemExit(str(exc)) from exc
     summary = aggregate(
         args.result_dir,
         args.benchmark_config,
         args.input_lengths,
         args.output_length,
         args.samples_per_length,
+        samples_by_length,
     )
     summary_path = args.result_dir / "summary.json"
     summary_path.write_text(

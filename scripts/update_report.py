@@ -1338,16 +1338,30 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         if run is None:
             continue
         status = run.get("prefill_ttft_status", "not-run")
-        sample_counts = {
-            int(result["completed"])
-            for result in run.get("single_request_ttft_results", [])
-            if result.get("status", "success") == "success"
-        }
         sample_suffix = ""
-        if status in {"success", "partial"} and len(sample_counts) == 1:
-            samples = sample_counts.pop()
+        counts_to_labels: dict[int, list[str]] = {}
+        if status in {"success", "partial"}:
+            for result in run.get("single_request_ttft_results", []):
+                samples = int(result.get("completed", 0))
+                if result.get("status", "success") != "success":
+                    samples = int(result.get("failed", 0))
+                if samples > 0:
+                    counts_to_labels.setdefault(samples, []).append(
+                        str(result["label"])
+                    )
+        if len(counts_to_labels) == 1:
+            samples = next(iter(counts_to_labels))
             sample_word = "sample" if samples == 1 else "samples"
             sample_suffix = f", **{samples} serial {sample_word}/length**"
+        elif counts_to_labels:
+            sample_groups = ", ".join(
+                f"{'/'.join(labels)}={samples}"
+                for samples, labels in counts_to_labels.items()
+            )
+            if sample_groups:
+                sample_suffix = (
+                    f", **serial samples/length: {sample_groups}**"
+                )
         ttft_status_lines.append(
             f"Latest {style['label']} single-request TTFT: "
             f"**{status}**{sample_suffix} (`{run['run_id']}`)."

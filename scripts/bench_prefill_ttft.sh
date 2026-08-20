@@ -14,6 +14,8 @@ BENCHMARK_CONFIG="${BENCHMARK_CONFIG:-dp8}"
 TTFT_INPUT_LENGTHS="${TTFT_INPUT_LENGTHS:-8192 16384 32768 65536 131072 258048}"
 TTFT_OUTPUT_LEN="${TTFT_OUTPUT_LEN:-1}"
 TTFT_NUM_PROMPTS="${TTFT_NUM_PROMPTS:-16}"
+TTFT_REDUCED_INPUT_LENGTHS="${TTFT_REDUCED_INPUT_LENGTHS:-65536 131072 258048}"
+TTFT_REDUCED_NUM_PROMPTS="${TTFT_REDUCED_NUM_PROMPTS:-4}"
 TEST_ONLY="${TEST_ONLY:-0}"
 FIXTURE_ROOT="${FIXTURE_ROOT:-$PROJECT_ROOT/tests/fixtures/prefill_ttft}"
 TTFT_TEST_ONLY_FAILED_LENGTHS="${TTFT_TEST_ONLY_FAILED_LENGTHS:-}"
@@ -49,7 +51,7 @@ if [[ "$TEST_ONLY" != 0 && "$TEST_ONLY" != 1 ]]; then
   echo "ERROR: TEST_ONLY must be 0 or 1." >&2
   exit 2
 fi
-for value_name in PORT TTFT_OUTPUT_LEN TTFT_NUM_PROMPTS; do
+for value_name in PORT TTFT_OUTPUT_LEN TTFT_NUM_PROMPTS TTFT_REDUCED_NUM_PROMPTS; do
   value=${!value_name}
   if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value == 0 )); then
     echo "ERROR: $value_name must be a positive integer, got '$value'." >&2
@@ -65,6 +67,13 @@ fi
 for input_length in "${input_lengths[@]}"; do
   if [[ ! "$input_length" =~ ^[0-9]+$ ]] || (( input_length == 0 )); then
     echo "ERROR: invalid TTFT input length '$input_length'." >&2
+    exit 2
+  fi
+done
+read -r -a reduced_input_lengths <<< "$TTFT_REDUCED_INPUT_LENGTHS"
+for input_length in "${reduced_input_lengths[@]}"; do
+  if [[ ! "$input_length" =~ ^[0-9]+$ ]] || (( input_length == 0 )); then
+    echo "ERROR: invalid reduced-sample TTFT input length '$input_length'." >&2
     exit 2
   fi
 done
@@ -103,7 +112,13 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
+samples_by_length_args=()
 for input_length in "${input_lengths[@]}"; do
+  num_prompts=$TTFT_NUM_PROMPTS
+  if [[ " ${reduced_input_lengths[*]} " == *" $input_length "* ]]; then
+    num_prompts=$TTFT_REDUCED_NUM_PROMPTS
+  fi
+  samples_by_length_args+=(--samples-by-length "$input_length=$num_prompts")
   result_filename="${result_prefix}_len${input_length}.json"
   result_path="$RESULT_DIR/$result_filename"
 
@@ -120,9 +135,9 @@ for input_length in "${input_lengths[@]}"; do
     "$AGGREGATE_PYTHON" "$SCRIPT_DIR/replay_prefill_ttft_fixture.py" \
       --source "$fixture_path" \
       --destination "$result_path" \
-      --samples "$TTFT_NUM_PROMPTS" \
+      --samples "$num_prompts" \
       "${replay_args[@]}"
-    echo "TEST_ONLY: replayed $fixture_path as $TTFT_NUM_PROMPTS serial requests"
+    echo "TEST_ONLY: replayed $fixture_path as $num_prompts serial requests"
     continue
   fi
 
@@ -147,7 +162,7 @@ for input_length in "${input_lengths[@]}"; do
     --random-input-len "$input_length" \
     --random-output-len "$TTFT_OUTPUT_LEN" \
     --random-range-ratio 0 \
-    --num-prompts "$TTFT_NUM_PROMPTS" \
+    --num-prompts "$num_prompts" \
     --request-rate inf \
     --max-concurrency 1 \
     --ignore-eos \
@@ -170,6 +185,7 @@ done
   --benchmark-config "$BENCHMARK_CONFIG" \
   --input-lengths "${input_lengths[@]}" \
   --output-length "$TTFT_OUTPUT_LEN" \
-  --samples-per-length "$TTFT_NUM_PROMPTS"
+  --samples-per-length "$TTFT_NUM_PROMPTS" \
+  "${samples_by_length_args[@]}"
 
 echo "Single-request TTFT benchmark completed: $RESULT_DIR/summary.json"

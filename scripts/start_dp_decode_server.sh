@@ -6,6 +6,26 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 source "$SCRIPT_DIR/launcher_env.sh"
 
+TEST_ONLY="${TEST_ONLY:-0}"
+extra_vllm_args=()
+while (( $# > 0 )); do
+  case "$1" in
+    --test-only)
+      TEST_ONLY=1
+      ;;
+    --)
+      shift
+      extra_vllm_args=("$@")
+      break
+      ;;
+    *)
+      echo "ERROR: unknown script argument '$1'; put vLLM arguments after --." >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
+
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
@@ -14,7 +34,9 @@ HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
 SERVICE_ID=tpu-daily-dp8-decode-c256
 ROLE=decode
-LAUNCH_ENV_FILE="${LAUNCH_ENV_FILE:-$PROJECT_ROOT/.state/launcher/$SERVICE_ID.env}"
+VLLM_SERVICE_LAUNCH="${VLLM_SERVICE_LAUNCH:-$PROJECT_ROOT/vendor/vllm-service-launch/bin/vllm-service-launch}"
+VLLM_SERVICE_STATE_ROOT="${VLLM_SERVICE_STATE_ROOT:-$PROJECT_ROOT/.state/vllm-service-launch}"
+VLLM_SERVICE_TARGET_ROOT="${VLLM_SERVICE_TARGET_ROOT:-/run/vllm-metrics-targets/targets}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-66560}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
@@ -59,6 +81,20 @@ case "${TPU_PARALLEL_PRECOMPILE,,}" in
     exit 2
     ;;
 esac
+
+if [[ "$TEST_ONLY" != 0 && "$TEST_ONLY" != 1 ]]; then
+  echo "ERROR: TEST_ONLY must be 0 or 1." >&2
+  exit 2
+fi
+if (( TEST_ONLY )); then
+  echo "TEST_ONLY: DP8 decode server startup skipped."
+  printf 'extra vLLM args:'
+  if (( ${#extra_vllm_args[@]} > 0 )); then
+    printf ' %q' "${extra_vllm_args[@]}"
+  fi
+  printf '\n'
+  exit 0
+fi
 
 if [[ ! -x "$VENV_DIR/bin/python" || ! -x "$VENV_DIR/bin/vllm" ]]; then
   echo "ERROR: project environment is incomplete: $VENV_DIR" >&2
@@ -251,60 +287,16 @@ echo "runtime temporary path:  $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache:   disabled (no /dev/shm dependency)"
 echo "unified block pool:      enabled (block size auto-derived)"
 
-write_launcher_env "$LAUNCH_ENV_FILE" \
-  PYTHONPATH \
-  HF_HUB_OFFLINE \
-  TRANSFORMERS_OFFLINE \
-  HF_DATASETS_OFFLINE \
-  JAX_PLATFORMS \
-  PJRT_DEVICE \
-  TPU_BACKEND_TYPE \
-  VLLM_TARGET_DEVICE \
-  VLLM_PLUGINS \
-  MODEL_IMPL_TYPE \
-  NEW_MODEL_DESIGN \
-  SKIP_JAX_PRECOMPILE \
-  VLLM_XLA_CHECK_RECOMPILATION \
-  XLA_PYTHON_CLIENT_PREALLOCATE \
-  VLLM_ALLOW_LONG_MAX_MODEL_LEN \
-  VLLM_DISABLE_COMPILE_CACHE \
-  TORCHINDUCTOR_AUTOGRAD_CACHE \
-  TPU_PARALLEL_PRECOMPILE \
-  TPU_PREMAPPED_BUFFER_SIZE \
-  RAY_memory_monitor_refresh_ms \
-  TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL \
-  TPU_KV_CACHE_HEADROOM_MIB \
-  USE_BATCHED_RPA_KERNEL \
-  RAGGED_GATED_DELTA_RULE_IMPL \
-  USE_MOE_SPARSE_CORE \
-  RAGGED_GATHER_VERSION \
-  RAGGED_GATHER_REDUCE_VERSION \
-  ONEHOT_MOE_PERMUTE_THRESHOLD \
-  DP_SCHED_BATCH_PREFILL_MAX_ADMIT_PER_FLUSH \
-  VLLM_ENGINE_READY_TIMEOUT_S \
-  TORCH_TPU_DP_MASTER_ADDR \
-  TORCH_TPU_DP_MASTER_PORT \
-  LIBTPU_INIT_ARGS \
-  VLLM_CACHE_ROOT \
-  VLLM_XLA_CACHE_PATH \
-  TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE \
-  TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT \
-  TORCHINDUCTOR_CACHE_DIR \
-  XDG_CACHE_HOME \
-  TMPDIR \
-  TMP \
-  TEMP \
-  PYTHONUNBUFFERED
-
 ensure_uv_on_path
-ensure_vllm_service_launcher
+ensure_vllm_service_launcher "$VLLM_SERVICE_LAUNCH"
 
-exec vllm-service-launch start \
+exec "$VLLM_SERVICE_LAUNCH" start \
+  --state-root "$VLLM_SERVICE_STATE_ROOT" \
+  --target-root "$VLLM_SERVICE_TARGET_ROOT" \
   --service-id "$SERVICE_ID" \
   --role "$ROLE" \
   --model-alias "$SERVED_MODEL_NAME" \
   --uv-project "$PROJECT_ROOT" \
-  --env-file "$LAUNCH_ENV_FILE" \
   --working-directory "$PROJECT_ROOT" \
   --host "$HOST" \
   --port "$PORT" \
@@ -332,4 +324,4 @@ exec vllm-service-launch start \
   --attention-backend CUSTOM \
   --limit-mm-per-prompt '{"image":0,"video":0}' \
   --compilation-config "$COMPILATION_CONFIG" \
-  "$@"
+  "${extra_vllm_args[@]}"

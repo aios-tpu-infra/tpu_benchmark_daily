@@ -122,6 +122,36 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
                 summary["benchmark"]["benchmark_config"], "pcp8"
             )
 
+    def test_test_only_reports_launcher_runtime_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            state_dir = Path(temporary_directory) / "state"
+            result = self.run_cli(
+                "--test-only",
+                "--only",
+                "dp-prefill",
+                environment={
+                    "MACHINE_IP": "127.0.0.1",
+                    "STATE_DIR": str(state_dir),
+                    "VLLM_SERVICE_LAUNCH": "/usr/local/bin/vllm-service-launch",
+                    "VLLM_SERVICE_STATE_ROOT": "/project/.state/vllm-service-launch",
+                    "VLLM_SERVICE_TARGET_ROOT": "/run/vllm-metrics-targets/targets",
+                },
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "vLLM service launcher: /usr/local/bin/vllm-service-launch",
+                result.stdout,
+            )
+            self.assertIn(
+                "vLLM service state: /project/.state/vllm-service-launch",
+                result.stdout,
+            )
+            self.assertIn(
+                "vLLM metrics targets: /run/vllm-metrics-targets/targets",
+                result.stdout,
+            )
+
     def test_throughput_only_replays_no_ttft_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             state_dir = Path(temporary_directory) / "state"

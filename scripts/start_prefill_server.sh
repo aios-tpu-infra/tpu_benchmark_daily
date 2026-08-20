@@ -9,7 +9,7 @@ source "$SCRIPT_DIR/launcher_env.sh"
 BENCHMARK_CONFIG=
 TEST_ONLY="${TEST_ONLY:-0}"
 
-server_args=()
+extra_vllm_args=()
 while (( $# > 0 )); do
   case "$1" in
     --config)
@@ -35,8 +35,14 @@ while (( $# > 0 )); do
     --test-only)
       TEST_ONLY=1
       ;;
+    --)
+      shift
+      extra_vllm_args=("$@")
+      break
+      ;;
     *)
-      server_args+=("$1")
+      echo "ERROR: unknown script argument '$1'; put vLLM arguments after --." >&2
+      exit 2
       ;;
   esac
   shift
@@ -78,7 +84,9 @@ SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
 ROLE=prefill
-LAUNCH_ENV_FILE="${LAUNCH_ENV_FILE:-$PROJECT_ROOT/.state/launcher/$SERVICE_ID.env}"
+VLLM_SERVICE_LAUNCH="${VLLM_SERVICE_LAUNCH:-$PROJECT_ROOT/vendor/vllm-service-launch/bin/vllm-service-launch}"
+VLLM_SERVICE_STATE_ROOT="${VLLM_SERVICE_STATE_ROOT:-$PROJECT_ROOT/.state/vllm-service-launch}"
+VLLM_SERVICE_TARGET_ROOT="${VLLM_SERVICE_TARGET_ROOT:-/run/vllm-metrics-targets/targets}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-262144}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
 RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"
@@ -141,6 +149,11 @@ if (( TEST_ONLY )); then
   if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
     echo "long prefill threshold:  $LONG_PREFILL_TOKEN_THRESHOLD"
   fi
+  printf 'extra vLLM args:'
+  if (( ${#extra_vllm_args[@]} > 0 )); then
+    printf ' %q' "${extra_vllm_args[@]}"
+  fi
+  printf '\n'
   exit 0
 fi
 
@@ -306,11 +319,9 @@ PROFILE_DELAY_ITERATIONS="${PROFILE_DELAY_ITERATIONS:-0}"
 PROFILE_MAX_ITERATIONS="${PROFILE_MAX_ITERATIONS:-0}"
 
 profile_args=()
-profile_env_keys=()
 if [[ -n "$PROFILE_DIR" ]]; then
   mkdir -p "$PROFILE_DIR"
   export VLLM_TORCH_PROFILER_DIR="$PROFILE_DIR"
-  profile_env_keys+=(VLLM_TORCH_PROFILER_DIR)
   profile_args=(
     --profiler-config.profiler torch
     --profiler-config.torch_profiler_dir "$VLLM_TORCH_PROFILER_DIR"
@@ -346,47 +357,16 @@ echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
 echo "unified block pool: enabled (block size auto-derived)"
 echo "skip padded MoE tokens: $TPU_MOE_SKIP_PADDED_TOKENS"
 
-write_launcher_env "$LAUNCH_ENV_FILE" \
-  PJRT_DEVICE \
-  VLLM_TARGET_DEVICE \
-  VLLM_PLUGINS \
-  PYTHONPATH \
-  HF_HUB_OFFLINE \
-  TRANSFORMERS_OFFLINE \
-  HF_DATASETS_OFFLINE \
-  SKIP_JAX_PRECOMPILE \
-  VLLM_DISABLE_COMPILE_CACHE \
-  TORCHINDUCTOR_AUTOGRAD_CACHE \
-  TPU_PARALLEL_PRECOMPILE \
-  TPU_PREMAPPED_BUFFER_SIZE \
-  RAY_memory_monitor_refresh_ms \
-  TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL \
-  TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG \
-  RAGGED_GATHER_REDUCE_VERSION \
-  TPU_MOE_SKIP_PADDED_TOKENS \
-  VLLM_ENGINE_READY_TIMEOUT_S \
-  VLLM_CACHE_ROOT \
-  VLLM_XLA_CACHE_PATH \
-  TORCH_TPU_INTERNAL_TIER2_COMPILATION_CACHE \
-  TORCH_TPU_INTERNAL_TIER3_COMPILATION_CACHE_ROOT \
-  TORCHINDUCTOR_CACHE_DIR \
-  XDG_CACHE_HOME \
-  TMPDIR \
-  TMP \
-  TEMP \
-  VLLM_XLA_CHECK_RECOMPILATION \
-  PYTHONUNBUFFERED \
-  "${profile_env_keys[@]}"
-
 ensure_uv_on_path
-ensure_vllm_service_launcher
+ensure_vllm_service_launcher "$VLLM_SERVICE_LAUNCH"
 
-exec vllm-service-launch start \
+exec "$VLLM_SERVICE_LAUNCH" start \
+  --state-root "$VLLM_SERVICE_STATE_ROOT" \
+  --target-root "$VLLM_SERVICE_TARGET_ROOT" \
   --service-id "$SERVICE_ID" \
   --role "$ROLE" \
   --model-alias "$SERVED_MODEL_NAME" \
   --uv-project "$PROJECT_ROOT" \
-  --env-file "$LAUNCH_ENV_FILE" \
   --working-directory "$PROJECT_ROOT" \
   --host "$HOST" \
   --port "$PORT" \
@@ -413,4 +393,4 @@ exec vllm-service-launch start \
   --return-tokens-as-token-ids \
   --compilation-config "$COMPILATION_CONFIG" \
   "${profile_args[@]}" \
-  "${server_args[@]}"
+  "${extra_vllm_args[@]}"

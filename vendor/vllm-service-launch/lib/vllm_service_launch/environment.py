@@ -6,11 +6,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
-from .schema import EnvironmentSpec, ServiceRequest
+from .schema import CandidateRequest, EnvironmentSpec
 
 ENV_KEY_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 RESERVED_ENVIRONMENT_KEYS = frozenset(
@@ -37,6 +38,25 @@ RESERVED_ENVIRONMENT_KEYS = frozenset(
 
 class RuntimeEnvironmentError(RuntimeError):
     """A requested Python or process environment is invalid."""
+
+
+def _stop_activation(
+    process: subprocess.Popen[bytes],
+    signal_number: int,
+) -> None:
+    try:
+        os.killpg(process.pid, signal_number)
+    except ProcessLookupError:
+        process.communicate(timeout=5)
+        return
+    try:
+        process.communicate(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.communicate(timeout=5)
 
 
 def _run_json(command: list[str]) -> object:
@@ -191,17 +211,36 @@ def parse_env_files(
 def _captured_environment(
     command: list[str],
     base_environment: Mapping[str, str],
+    cancellation_signal: Callable[[], int | None],
 ) -> dict[str, str]:
-    result = subprocess.run(
+    process = subprocess.Popen(
         command,
         env=dict(base_environment),
-        capture_output=True,
-        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
     )
-    if result.returncode != 0:
+    try:
+        while True:
+            try:
+                stdout, _stderr = process.communicate(timeout=0.05)
+                break
+            except subprocess.TimeoutExpired:
+                requested_signal = cancellation_signal()
+                if requested_signal is None:
+                    continue
+                _stop_activation(process, requested_signal)
+                raise RuntimeEnvironmentError(
+                    "environment activation was cancelled"
+                )
+    except BaseException:
+        if process.poll() is None:
+            _stop_activation(process, signal.SIGKILL)
+        raise
+    if process.returncode != 0:
         raise RuntimeEnvironmentError(f"environment activation failed: {command[0]}")
     try:
-        decoded = result.stdout.decode("utf-8")
+        decoded = stdout.decode("utf-8")
     except UnicodeError as exc:
         raise RuntimeEnvironmentError(
             "activated environment is not valid UTF-8"
@@ -215,7 +254,7 @@ def _captured_environment(
                 "activated environment contains an invalid assignment"
             )
         key, value = assignment.split("=", 1)
-        if ENV_KEY_PATTERN.fullmatch(key) is None or key in environment:
+        if not key or "=" in key or "\0" in key or key in environment:
             raise RuntimeEnvironmentError(
                 "activated environment contains an invalid key"
             )
@@ -226,17 +265,14 @@ def _captured_environment(
 
 
 def build_runtime_environment(
-    request: ServiceRequest,
+    candidate: CandidateRequest,
+    base_environment: Mapping[str, str],
+    *,
+    cancellation_signal: Callable[[], int | None] = lambda: None,
 ) -> dict[str, str]:
-    caller = request.caller
-    base_environment = {
-        "HOME": str(caller.home),
-        "USER": caller.name,
-        "LOGNAME": caller.name,
-        "SHELL": str(caller.shell),
-        "PATH": "/usr/local/bin:/usr/bin:/bin",
-    }
-    specification = request.candidate.environment
+    if "PATH" not in base_environment:
+        raise RuntimeEnvironmentError("calling environment does not define PATH")
+    specification = candidate.environment
     if specification.kind == "conda":
         command = [
             str(specification.executable),
@@ -262,17 +298,13 @@ def build_runtime_environment(
     else:
         raise RuntimeEnvironmentError("unsupported environment kind")
 
-    activated = _captured_environment(command, base_environment)
+    activated = _captured_environment(
+        command,
+        base_environment,
+        cancellation_signal,
+    )
     if specification.kind == "conda" and activated.get("CONDA_PREFIX") != str(
         specification.prefix
     ):
         raise RuntimeEnvironmentError("Conda activated the wrong prefix")
-    activated.update(
-        {
-            "HOME": base_environment["HOME"],
-            "USER": base_environment["USER"],
-            "LOGNAME": base_environment["LOGNAME"],
-            "SHELL": base_environment["SHELL"],
-        }
-    )
-    return parse_env_files(request.candidate.env_files, activated)
+    return parse_env_files(candidate.env_files, activated)

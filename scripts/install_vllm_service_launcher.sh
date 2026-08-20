@@ -11,11 +11,11 @@ usage() {
   cat <<'EOF'
 Usage: scripts/install_vllm_service_launcher.sh [--root ABSOLUTE_PATH]
 
-Installs the repository-owned vllm-service-launch CLI, Python library, sudoers
-policy, systemd template, and runtime-directory tmpfiles configuration.
+Installs the repository-owned vllm-service-launch CLI and Python library.
 
   --root ABSOLUTE_PATH  Stage files below an alternate root without invoking
-                        systemd. Intended for packaging and tests.
+                        privileged system changes. Intended for packaging and
+                        tests.
 EOF
 }
 
@@ -59,23 +59,6 @@ if ! command -v python3.12 >/dev/null 2>&1; then
   exit 1
 fi
 
-VISUDO_BIN=$(command -v visudo || true)
-if [[ -z "$VISUDO_BIN" ]]; then
-  echo "ERROR: visudo is required to validate the launcher sudoers policy." >&2
-  exit 1
-fi
-
-SYSTEMD_TMPFILES_BIN=
-SYSTEMCTL_BIN=
-if [[ "$INSTALL_ROOT" == / ]]; then
-  SYSTEMD_TMPFILES_BIN=$(command -v systemd-tmpfiles || true)
-  SYSTEMCTL_BIN=$(command -v systemctl || true)
-  if [[ -z "$SYSTEMD_TMPFILES_BIN" || -z "$SYSTEMCTL_BIN" ]]; then
-    echo "ERROR: systemd-tmpfiles and systemctl are required." >&2
-    exit 1
-  fi
-fi
-
 destination() {
   local path=$1
   if [[ "$INSTALL_ROOT" == / ]]; then
@@ -85,6 +68,19 @@ destination() {
   fi
 }
 
+legacy_paths=(
+  /etc/sudoers.d/vllm-service-launch
+  /etc/systemd/system/vllm@.service
+  /usr/lib/tmpfiles.d/vllm-metrics-targets.conf
+)
+for legacy_path in "${legacy_paths[@]}"; do
+  if [[ -e "$(destination "$legacy_path")" ]]; then
+    echo "ERROR: legacy launcher asset exists: $legacy_path" >&2
+    echo "Remove the legacy systemd installation before retrying; see vendor/vllm-service-launch/README.md." >&2
+    exit 1
+  fi
+done
+
 install -D -m 0755 \
   "$SOURCE_DIR/bin/vllm-service-launch" \
   "$(destination /usr/local/bin/vllm-service-launch)"
@@ -92,31 +88,9 @@ install -D -m 0755 \
 library_destination=$(destination \
   /usr/local/lib/vllm-service-launch/vllm_service_launch)
 install -d -m 0755 "$library_destination"
+rm -f -- "$library_destination/identity.py"
 for module in "$SOURCE_DIR"/lib/vllm_service_launch/*.py; do
   install -m 0644 "$module" "$library_destination/$(basename -- "$module")"
 done
-
-sudoers_source="$SOURCE_DIR/sudoers/vllm-service-launch"
-sudoers_destination=$(destination /etc/sudoers.d/vllm-service-launch)
-"$VISUDO_BIN" -cf "$sudoers_source" >/dev/null
-install -D -m 0440 "$sudoers_source" "$sudoers_destination"
-"$VISUDO_BIN" -cf "$sudoers_destination" >/dev/null
-
-install -D -m 0644 \
-  "$SOURCE_DIR/systemd/vllm@.service" \
-  "$(destination /etc/systemd/system/vllm@.service)"
-install -D -m 0644 \
-  "$SOURCE_DIR/systemd/vllm-metrics-targets.conf" \
-  "$(destination /usr/lib/tmpfiles.d/vllm-metrics-targets.conf)"
-
-install -d -m 0755 \
-  "$(destination /run/vllm-services)" \
-  "$(destination /run/vllm-metrics-targets)" \
-  "$(destination /run/vllm-metrics-targets/targets)"
-
-if [[ "$INSTALL_ROOT" == / ]]; then
-  "$SYSTEMD_TMPFILES_BIN" --create vllm-metrics-targets.conf
-  "$SYSTEMCTL_BIN" daemon-reload
-fi
 
 echo "Installed repository-owned vllm-service-launch under $INSTALL_ROOT"

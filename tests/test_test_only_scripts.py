@@ -83,7 +83,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("skip padded MoE tokens:  1", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
-        self.assertIn("max sequences:           8", pcp.stdout)
+        self.assertIn("max sequences:           64", pcp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("skip padded MoE tokens:  0", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
@@ -204,10 +204,51 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     script,
                 )
                 self.assertIn("export TPU_PARALLEL_PRECOMPILE", script)
-                launcher_environment = script.split(
-                    'write_launcher_env "$LAUNCH_ENV_FILE"', 1
-                )[1]
-                self.assertIn("TPU_PARALLEL_PRECOMPILE", launcher_environment)
+
+    def test_server_scripts_preserve_vllm_args_after_separator(self) -> None:
+        cases = (
+            ("start_dp_decode_server.sh", ("--test-only",)),
+            (
+                "start_prefill_server.sh",
+                ("--config", "dp8", "--test-only"),
+            ),
+        )
+        for script_name, script_arguments in cases:
+            with self.subTest(script_name=script_name):
+                result = self.run_script(
+                    script_name,
+                    *script_arguments,
+                    "--",
+                    "--enable-feature-x",
+                    "value with space",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    "extra vLLM args: --enable-feature-x value\\ with\\ space",
+                    result.stdout,
+                )
+                self.assertNotIn(
+                    "extra vLLM args: -- --enable-feature-x",
+                    result.stdout,
+                )
+
+    def test_prefill_treats_script_flags_after_separator_as_vllm_args(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            "--",
+            "--config",
+            "server-owned",
+            "--test-only",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "extra vLLM args: --config server-owned --test-only",
+            result.stdout,
+        )
 
     def test_all_server_configs_set_premapped_buffer_size(self) -> None:
         for script_name in (
@@ -223,12 +264,6 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     script,
                 )
                 self.assertIn("export TPU_PREMAPPED_BUFFER_SIZE", script)
-                launcher_environment = script.split(
-                    'write_launcher_env "$LAUNCH_ENV_FILE"', 1
-                )[1]
-                self.assertIn(
-                    "TPU_PREMAPPED_BUFFER_SIZE", launcher_environment
-                )
 
     def test_decode_server_uses_4096_token_chunk_and_compile_bucket(self) -> None:
         script = (

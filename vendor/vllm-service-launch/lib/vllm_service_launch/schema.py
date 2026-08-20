@@ -341,6 +341,12 @@ def _nonnegative_integer(value: object, *, name: str) -> int:
     return value
 
 
+def _boolean(value: object, *, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise ContractError(f"{name} must be a boolean")
+    return value
+
+
 def _opaque_id(value: object, *, name: str) -> str:
     opaque_id = _required_string(value, name=name)
     if OPAQUE_ID_PATTERN.fullmatch(opaque_id) is None:
@@ -349,86 +355,16 @@ def _opaque_id(value: object, *, name: str) -> str:
 
 
 @dataclass(frozen=True)
-class CallerIdentity:
-    uid: int
-    gid: int
-    name: str
-    home: Path
-    shell: Path
-
-    @classmethod
-    def from_dict(cls, value: object) -> CallerIdentity:
-        payload = _strict_object(
-            value,
-            name="caller",
-            required=frozenset({"uid", "gid", "name", "home", "shell"}),
-        )
-        return cls(
-            uid=_nonnegative_integer(payload["uid"], name="caller.uid"),
-            gid=_nonnegative_integer(payload["gid"], name="caller.gid"),
-            name=_required_string(payload["name"], name="caller.name"),
-            home=_absolute_path(payload["home"], name="caller.home"),
-            shell=_absolute_path(payload["shell"], name="caller.shell"),
-        )
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "uid": self.uid,
-            "gid": self.gid,
-            "name": self.name,
-            "home": str(self.home),
-            "shell": str(self.shell),
-        }
-
-
-@dataclass(frozen=True)
 class ServiceRequest:
-    state: Literal["pending", "claimed", "published"]
     request_id: str
-    invocation_id: str | None
-    caller: CallerIdentity
     candidate: CandidateRequest
+    starter: ProcessIdentity
+    supervisor: ProcessIdentity | None
+    cancellation_requested: bool
 
     @property
     def service_id(self) -> str:
         return self.candidate.service_id
-
-    @classmethod
-    def pending(
-        cls,
-        candidate: CandidateRequest,
-        caller: CallerIdentity,
-        request_id: str,
-    ) -> ServiceRequest:
-        return cls(
-            state="pending",
-            request_id=_opaque_id(request_id, name="request_id"),
-            invocation_id=None,
-            caller=caller,
-            candidate=candidate,
-        )
-
-    def claimed(self, invocation_id: str) -> ServiceRequest:
-        if self.state != "pending":
-            raise ContractError("only a pending request can be claimed")
-        return ServiceRequest(
-            state="claimed",
-            request_id=self.request_id,
-            invocation_id=_opaque_id(invocation_id, name="systemd_invocation_id"),
-            caller=self.caller,
-            candidate=self.candidate,
-        )
-
-    def published(self) -> ServiceRequest:
-        if self.state != "claimed" or self.invocation_id is None:
-            raise ContractError("only a claimed request can be published")
-        return ServiceRequest(
-            state="published",
-            request_id=self.request_id,
-            invocation_id=self.invocation_id,
-            caller=self.caller,
-            candidate=self.candidate,
-        )
 
     @classmethod
     def from_dict(cls, value: object) -> ServiceRequest:
@@ -438,54 +374,81 @@ class ServiceRequest:
             required=frozenset(
                 {
                     "schema_version",
-                    "state",
                     "request_id",
-                    "caller",
                     "candidate",
+                    "starter",
+                    "cancellation_requested",
                 }
             ),
-            optional=frozenset({"systemd_invocation_id"}),
+            optional=frozenset({"supervisor"}),
         )
         _require_schema_version(payload["schema_version"], name="service request")
-        state = payload["state"]
-        if state not in {"pending", "claimed", "published"}:
-            raise ContractError("invalid request state")
-        invocation_value = payload.get("systemd_invocation_id")
-        if state == "pending" and invocation_value is not None:
-            raise ContractError("pending request must not have invocation ID")
-        if state != "pending" and invocation_value is None:
-            raise ContractError("claimed request requires invocation ID")
         return cls(
-            state=state,
             request_id=_opaque_id(payload["request_id"], name="request_id"),
-            invocation_id=(
-                _opaque_id(invocation_value, name="systemd_invocation_id")
-                if invocation_value is not None
+            candidate=CandidateRequest.from_dict(payload["candidate"]),
+            starter=ProcessIdentity.from_dict(payload["starter"], name="starter"),
+            supervisor=(
+                ProcessIdentity.from_dict(
+                    payload["supervisor"],
+                    name="supervisor",
+                )
+                if payload.get("supervisor") is not None
                 else None
             ),
-            caller=CallerIdentity.from_dict(payload["caller"]),
-            candidate=CandidateRequest.from_dict(payload["candidate"]),
+            cancellation_requested=_boolean(
+                payload["cancellation_requested"],
+                name="cancellation_requested",
+            ),
         )
 
     def to_dict(self) -> dict[str, object]:
         payload = {
             "schema_version": SCHEMA_VERSION,
-            "state": self.state,
             "request_id": self.request_id,
-            "caller": self.caller.to_dict(),
             "candidate": self.candidate.to_dict(),
+            "starter": self.starter.to_dict(),
+            "cancellation_requested": self.cancellation_requested,
         }
-        if self.invocation_id is not None:
-            payload["systemd_invocation_id"] = self.invocation_id
+        if self.supervisor is not None:
+            payload["supervisor"] = self.supervisor.to_dict()
         return payload
+
+
+@dataclass(frozen=True)
+class ProcessIdentity:
+    pid: int
+    start_time: int
+
+    @classmethod
+    def from_dict(cls, value: object, *, name: str) -> ProcessIdentity:
+        payload = _strict_object(
+            value,
+            name=name,
+            required=frozenset({"pid", "start_time"}),
+        )
+        pid = payload["pid"]
+        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+            raise ContractError(f"{name}.pid must be a positive integer")
+        return cls(
+            pid=pid,
+            start_time=_nonnegative_integer(
+                payload["start_time"],
+                name=f"{name}.start_time",
+            ),
+        )
+
+    def to_dict(self) -> dict[str, int]:
+        return {"pid": self.pid, "start_time": self.start_time}
 
 
 @dataclass(frozen=True)
 class RuntimeState:
     request_id: str
-    invocation_id: str
     service_id: str
-    pid: int
+    supervisor: ProcessIdentity
+    server: ProcessIdentity
+    server_pgid: int
+    server_session_id: int
     listen_host: str
     scrape_host: str
     port: int
@@ -499,9 +462,11 @@ class RuntimeState:
                 {
                     "schema_version",
                     "request_id",
-                    "systemd_invocation_id",
                     "service_id",
-                    "pid",
+                    "supervisor",
+                    "server",
+                    "server_pgid",
+                    "server_session_id",
                     "listen_host",
                     "scrape_host",
                     "port",
@@ -512,9 +477,20 @@ class RuntimeState:
         service_id = _required_string(payload["service_id"], name="service_id")
         if SERVICE_ID_PATTERN.fullmatch(service_id) is None:
             raise ContractError("invalid service_id")
-        pid = payload["pid"]
-        if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-            raise ContractError("pid must be a positive integer")
+        server_pgid = payload["server_pgid"]
+        if (
+            isinstance(server_pgid, bool)
+            or not isinstance(server_pgid, int)
+            or server_pgid <= 0
+        ):
+            raise ContractError("server_pgid must be a positive integer")
+        server_session_id = payload["server_session_id"]
+        if (
+            isinstance(server_session_id, bool)
+            or not isinstance(server_session_id, int)
+            or server_session_id <= 0
+        ):
+            raise ContractError("server_session_id must be a positive integer")
         listen_host = _required_string(payload["listen_host"], name="listen_host")
         scrape_host = _required_string(payload["scrape_host"], name="scrape_host")
         try:
@@ -524,12 +500,13 @@ class RuntimeState:
             raise ContractError("runtime hosts must be IP literals") from exc
         return cls(
             request_id=_opaque_id(payload["request_id"], name="request_id"),
-            invocation_id=_opaque_id(
-                payload["systemd_invocation_id"],
-                name="systemd_invocation_id",
-            ),
             service_id=service_id,
-            pid=pid,
+            supervisor=ProcessIdentity.from_dict(
+                payload["supervisor"], name="supervisor"
+            ),
+            server=ProcessIdentity.from_dict(payload["server"], name="server"),
+            server_pgid=server_pgid,
+            server_session_id=server_session_id,
             listen_host=listen_host,
             scrape_host=scrape_host,
             port=_port(payload["port"], name="port"),
@@ -539,9 +516,11 @@ class RuntimeState:
         return {
             "schema_version": SCHEMA_VERSION,
             "request_id": self.request_id,
-            "systemd_invocation_id": self.invocation_id,
             "service_id": self.service_id,
-            "pid": self.pid,
+            "supervisor": self.supervisor.to_dict(),
+            "server": self.server.to_dict(),
+            "server_pgid": self.server_pgid,
+            "server_session_id": self.server_session_id,
             "listen_host": self.listen_host,
             "scrape_host": self.scrape_host,
             "port": self.port,

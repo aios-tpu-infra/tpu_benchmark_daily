@@ -1,6 +1,0 @@
-Cmnd_Alias VLLM_SERVICE_CONTROL = \
-    /usr/local/bin/vllm-service-launch submit, \
-    /usr/local/bin/vllm-service-launch status-internal *, \
-    /usr/local/bin/vllm-service-launch stop-internal *
-
-ALL ALL=(root) NOPASSWD: VLLM_SERVICE_CONTROL

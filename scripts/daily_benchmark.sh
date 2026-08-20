@@ -5,6 +5,14 @@ set -Eeuo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"
+VLLM_SERVICE_LAUNCH="${VLLM_SERVICE_LAUNCH:-$PROJECT_ROOT/vendor/vllm-service-launch/bin/vllm-service-launch}"
+VLLM_SERVICE_STATE_ROOT="${VLLM_SERVICE_STATE_ROOT:-$PROJECT_ROOT/.state/vllm-service-launch}"
+VLLM_SERVICE_TARGET_ROOT="${VLLM_SERVICE_TARGET_ROOT:-/run/vllm-metrics-targets/targets}"
+export VLLM_SERVICE_LAUNCH VLLM_SERVICE_STATE_ROOT VLLM_SERVICE_TARGET_ROOT
+VLLM_SERVICE_LAYOUT_ARGS=(
+  --state-root "$VLLM_SERVICE_STATE_ROOT"
+  --target-root "$VLLM_SERVICE_TARGET_ROOT"
+)
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
 MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
@@ -361,6 +369,9 @@ echo "Machine IP: $MACHINE_IP"
 echo "Benchmark selection: $BENCHMARK_SELECTION"
 echo "Prefill mode: $PREFILL_MODE"
 echo "Prefill workload: $PREFILL_WORKLOAD"
+echo "vLLM service launcher: $VLLM_SERVICE_LAUNCH"
+echo "vLLM service state: $VLLM_SERVICE_STATE_ROOT"
+echo "vLLM metrics targets: $VLLM_SERVICE_TARGET_ROOT"
 if [[ -n "$TORCHTPU_COMMIT" ]]; then
   echo "Requested vllm-torchtpu commit: $TORCHTPU_COMMIT"
 else
@@ -496,19 +507,21 @@ EOF
 fi
 
 if (( ! PREPARE_ONLY )); then
-  if ! command -v vllm-service-launch >/dev/null 2>&1; then
-    echo "ERROR: vllm-service-launch is not installed." >&2
-    echo "Install it with: sudo $PROJECT_ROOT/scripts/install_vllm_service_launcher.sh" >&2
+  if [[ ! -x "$VLLM_SERVICE_LAUNCH" ]]; then
+    echo "ERROR: vllm-service-launch is not executable: $VLLM_SERVICE_LAUNCH" >&2
     exit 1
   fi
   for service_id in \
       "$DP_DECODE_SERVICE_ID" \
       "$DP_PREFILL_SERVICE_ID" \
       "$PCP_PREFILL_SERVICE_ID"; do
-    if vllm-service-launch status \
+    if "$VLLM_SERVICE_LAUNCH" status \
+        "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
         --service-id "$service_id" >/dev/null 2>&1; then
       echo "Stopping existing launcher service $service_id..."
-      vllm-service-launch stop --service-id "$service_id"
+      "$VLLM_SERVICE_LAUNCH" stop \
+        "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
+        --service-id "$service_id"
     fi
   done
 fi
@@ -582,17 +595,6 @@ RUN_SUCCEEDED=0
 REPORT_GENERATED=0
 BENCHMARK_FAILURES=0
 
-archive_server_log() {
-  if [[ -z "$SERVER_SERVICE_ID" ]]; then
-    return
-  fi
-  journalctl \
-    -u "vllm@${SERVER_SERVICE_ID}.service" \
-    --since "$benchmark_started_at" \
-    --no-pager \
-    > "$RUN_DIR/${SERVER_CONFIG}_server.log" 2>&1 || true
-}
-
 server_port_is_bindable() {
   "$VENV_DIR/bin/python" - "$PORT" <<'PY'
 import socket
@@ -616,7 +618,6 @@ stop_server() {
     return
   fi
   if (( KEEP_SERVER_RUNNING && RUN_SUCCEEDED )); then
-    archive_server_log
     echo "Keeping $SERVER_CONFIG launcher service $SERVER_SERVICE_ID running."
     return
   fi
@@ -624,9 +625,12 @@ stop_server() {
   target_config=$SERVER_CONFIG
   target_service_id=$SERVER_SERVICE_ID
   echo "Stopping $target_config launcher service $target_service_id..."
-  if vllm-service-launch status \
+  if "$VLLM_SERVICE_LAUNCH" status \
+      "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
       --service-id "$target_service_id" >/dev/null 2>&1; then
-    vllm-service-launch stop --service-id "$target_service_id"
+    "$VLLM_SERVICE_LAUNCH" stop \
+      "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
+      --service-id "$target_service_id"
   fi
   for (( waited = 0; waited < SERVER_STOP_TIMEOUT; waited += 1 )); do
     if server_port_is_bindable; then
@@ -639,10 +643,8 @@ stop_server() {
   done
   if ! server_port_is_bindable; then
     echo "ERROR: $target_config server did not release port $PORT within ${SERVER_STOP_TIMEOUT}s." >&2
-    archive_server_log
     return 1
   fi
-  archive_server_log
   SERVER_SERVICE_ID=""
   SERVER_CONFIG=""
   echo "$target_config server stopped."
@@ -653,7 +655,6 @@ start_server() {
   local server_script=$2
   local server_model_dir=$3
   local service_id=$4
-  local launch_log="$RUN_DIR/${benchmark_config}_launcher.log"
   local status_path="$RUN_DIR/${benchmark_config}_service_status.json"
   local ready=0
 
@@ -670,10 +671,8 @@ start_server() {
     VENV_DIR="$VENV_DIR" \
     TORCHTPU_DIR="$TORCHTPU_DIR" \
     MODEL_DIR="$server_model_dir" \
-    LAUNCH_ENV_FILE="$RUN_DIR/launcher/${benchmark_config}.env" \
-    "$server_script" > "$launch_log" 2>&1; then
+    "$server_script"; then
     echo "ERROR: $benchmark_config launcher submission failed." >&2
-    tail -n 200 "$launch_log" >&2
     return 1
   fi
 
@@ -682,12 +681,11 @@ start_server() {
       ready=1
       break
     fi
-    if ! vllm-service-launch status \
+    if ! "$VLLM_SERVICE_LAUNCH" status \
+        "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
         --service-id "$service_id" \
         --json > "$status_path"; then
       echo "ERROR: $benchmark_config server exited during startup." >&2
-      archive_server_log
-      tail -n 200 "$RUN_DIR/${benchmark_config}_server.log" >&2
       return 1
     fi
     if (( waited > 0 && waited % 60 == 0 )); then
@@ -698,11 +696,10 @@ start_server() {
 
   if (( ! ready )); then
     echo "ERROR: $benchmark_config server did not become healthy within ${SERVER_READY_TIMEOUT}s." >&2
-    archive_server_log
-    tail -n 200 "$RUN_DIR/${benchmark_config}_server.log" >&2
     return 1
   fi
-  vllm-service-launch status \
+  "$VLLM_SERVICE_LAUNCH" status \
+    "${VLLM_SERVICE_LAYOUT_ARGS[@]}" \
     --service-id "$service_id" \
     --json > "$status_path"
   echo "$benchmark_config server is healthy on port $PORT."

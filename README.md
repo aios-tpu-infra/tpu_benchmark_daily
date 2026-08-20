@@ -116,16 +116,17 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
   compatible `torch_tpu` wheel from Google Artifact Registry with pip, then
   synchronizes the rest of the project `.venv`.
 - `vendor/vllm-service-launch/`: repository-owned service launcher runtime,
-  systemd template, sudoers policy, and tmpfiles configuration.
+  including the per-service supervisor and installed/zero-install entrypoints.
 - `scripts/install_vllm_service_launcher.sh`: installs the vendored launcher
-  without requiring access to another source repository.
+  executable and Python library without installing an init unit or privilege
+  policy.
 - `scripts/daily_benchmark.sh`: complete locked cron workflow.
 - `reports/`: durable peak-throughput history and generated SVG charts.
 - `runs/`: timestamped logs, environment snapshots, and benchmark JSON files.
 
 ## First preparation
 
-机器需要安装 `git`、`uv`、Google Cloud CLI、Python 3.12 和 `sudo`。拉取 `vllm-torchtpu`
+机器需要安装 `git`、`uv`、Google Cloud CLI 和 Python 3.12。拉取 `vllm-torchtpu`
 submodule 需要 GitHub SSH 权限；当前 gcloud 用户必须具有私有 `torch-tpu`
 Artifact Registry 的读取权限。首次运行前先完成认证：
 
@@ -134,12 +135,71 @@ gcloud auth login
 gcloud auth list --filter=status:ACTIVE
 ```
 
-直接从本仓库在 benchmark 主机安装 launcher：
+daily 默认直接使用仓库 vendored launcher，不需要安装：
+
+```bash
+vendor/vllm-service-launch/bin/vllm-service-launch --help
+```
+
+如需部署到 `/usr/local`，再执行安装；sudo 只用于写系统安装目录，launcher 运行时不提权：
 
 ```bash
 sudo scripts/install_vllm_service_launcher.sh
 vllm-service-launch --help
 ```
+
+当前 Prometheus Agent 通过 file-SD 读取
+`/run/vllm-metrics-targets/targets/*.json`。该路径不是 Prometheus 默认值；部署阶段必须
+预创建并授权给 benchmark runtime user，运行时不需要 root：
+
+```bash
+sudo install -d -o "$(id -u)" -g "$(id -g)" -m 0755 \
+  /run/vllm-metrics-targets/targets
+```
+
+容器环境可用 init container、`emptyDir`/`fsGroup` 提供相同权限，Agent 保持只读挂载。
+私有 lifecycle metadata 写入项目 `.state/vllm-service-launch`，不会被 Agent 读取。
+
+## 服务启动、feature 参数与日志
+
+三个服务入口继承调用方完整环境。测试新的 env feature 时直接 export，不再修改 daily
+变量白名单：
+
+```bash
+export TPU_EXPERIMENTAL_FEATURE=1
+scripts/start_dp_decode_server.sh -- --enable-feature-x
+scripts/start_prefill_server.sh --config dp8 -- --enable-feature-x
+scripts/start_prefill_server.sh --config pcp8 -- --enable-feature-x
+```
+
+`--` 之前是脚本选项，之后的 token 原样追加到 benchmark 默认 vLLM argv 末尾；重复参数
+采用 vLLM 自身 parser 语义。daily 默认使用 vendored 入口；验证安装版时显式覆盖：
+
+```bash
+VLLM_SERVICE_LAUNCH=/usr/local/bin/vllm-service-launch \
+  scripts/start_prefill_server.sh --config dp8
+```
+
+每个服务对应一个后台 launcher supervisor。supervisor 与 vLLM 默认继承 daily 的
+stdout/stderr，runner 不再把 server 日志隐藏到独立 launcher 文件或 init journal；从 Pod
+主启动流程调用时可直接通过容器日志查看。临时 `kubectl exec` 继承的是 exec session fd，
+不等价于 Pod 主日志。
+
+状态管理示例：
+
+```bash
+launcher=vendor/vllm-service-launch/bin/vllm-service-launch
+state_root="$PWD/.state/vllm-service-launch"
+target_root=/run/vllm-metrics-targets/targets
+
+"$launcher" status --state-root "$state_root" --target-root "$target_root" \
+  --service-id tpu-daily-dp8-prefill --json
+"$launcher" stop --state-root "$state_root" --target-root "$target_root" \
+  --service-id tpu-daily-dp8-prefill
+```
+
+详细生命周期、异常恢复、安装 staging 和 fake-server 复现方式见
+[`vendor/vllm-service-launch/README.md`](vendor/vllm-service-launch/README.md)。
 
 完整 daily run 要求 `models/Qwen3.5-397B-A17B-FP8` 中存在真实模型权重。
 权重文件由环境在本地提供并被 Git 忽略；`--prepare-only` 只执行

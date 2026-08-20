@@ -1,4 +1,4 @@
-"""Ephemeral request, runtime, and Prometheus target state."""
+"""Private lifecycle metadata and public Prometheus target state."""
 
 from __future__ import annotations
 
@@ -12,42 +12,34 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
-from .endpoint import allocate_endpoint
-from .schema import (
-    CallerIdentity,
-    CandidateRequest,
-    ContractError,
-    RuntimeState,
-    ServiceRequest,
-)
+from .endpoint import Endpoint
+from .schema import ContractError, ProcessIdentity, RuntimeState, ServiceRequest
 
 
 class StateError(RuntimeError):
-    """Ephemeral launcher state is missing, malformed, or not owned."""
+    """Launcher lifecycle state is missing, malformed, or unsafe."""
 
 
 @dataclass(frozen=True)
 class RuntimeLayout:
-    services_root: Path
+    state_root: Path
     targets_root: Path
 
     @classmethod
-    def system(cls) -> RuntimeLayout:
-        return cls(
-            services_root=Path("/run/vllm-services"),
-            targets_root=Path("/run/vllm-metrics-targets/targets"),
-        )
+    def from_roots(
+        cls,
+        state_root: Path,
+        targets_root: Path,
+    ) -> RuntimeLayout:
+        return cls(state_root=state_root, targets_root=targets_root)
 
-    @classmethod
-    def under(cls, root: Path) -> RuntimeLayout:
-        return cls(
-            services_root=root / "vllm-services",
-            targets_root=root / "vllm-metrics-targets" / "targets",
-        )
+    @property
+    def services_root(self) -> Path:
+        return self.state_root / "services"
 
     @property
     def registry_lock(self) -> Path:
-        return self.services_root / "registry.lock"
+        return self.state_root / "registry.lock"
 
     def service_directory(self, service_id: str) -> Path:
         return self.services_root / service_id
@@ -65,21 +57,35 @@ class RuntimeLayout:
         return self.targets_root / f"{service_id}.json"
 
 
-def _ensure_directory(path: Path, mode: int) -> None:
-    path.mkdir(parents=True, exist_ok=True, mode=mode)
-    os.chmod(path, mode)
+def _ensure_private_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = path.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise StateError(f"private state path is not a real directory: {path}")
+    os.chmod(path, 0o700)
 
 
-def _prepare_layout(layout: RuntimeLayout) -> None:
-    _ensure_directory(layout.services_root, 0o755)
-    _ensure_directory(layout.targets_root.parent, 0o755)
-    _ensure_directory(layout.targets_root, 0o755)
+def _prepare_service(layout: RuntimeLayout, service_id: str) -> None:
+    _ensure_private_directory(layout.state_root)
+    _ensure_private_directory(layout.services_root)
+    _ensure_private_directory(layout.service_directory(service_id))
+
+
+def _require_target_root(layout: RuntimeLayout) -> None:
+    try:
+        metadata = layout.targets_root.lstat()
+    except FileNotFoundError as exc:
+        raise StateError(f"target root does not exist: {layout.targets_root}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise StateError(f"target root is not a real directory: {layout.targets_root}")
+    if not os.access(layout.targets_root, os.W_OK):
+        raise StateError(f"target root is not writable: {layout.targets_root}")
 
 
 def _fsync_directory(directory: Path) -> None:
     descriptor = os.open(
         directory,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
     )
     try:
         os.fsync(descriptor)
@@ -98,11 +104,11 @@ def _atomic_write_json(path: Path, payload: Any, mode: int) -> None:
             delete=False,
         ) as temporary:
             temporary_path = Path(temporary.name)
+            os.fchmod(temporary.fileno(), mode)
             json.dump(payload, temporary, ensure_ascii=False, indent=2)
             temporary.write("\n")
             temporary.flush()
             os.fsync(temporary.fileno())
-        os.chmod(temporary_path, mode)
         os.replace(temporary_path, path)
         temporary_path = None
         _fsync_directory(path.parent)
@@ -112,9 +118,8 @@ def _atomic_write_json(path: Path, payload: Any, mode: int) -> None:
 
 
 def _read_json(path: Path) -> object:
-    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except OSError as exc:
         raise StateError(f"cannot open state file: {path}") from exc
     try:
@@ -132,6 +137,52 @@ def _read_json(path: Path) -> object:
             os.close(descriptor)
 
 
+def _unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    _fsync_directory(path.parent)
+
+
+@contextmanager
+def _exclusive_lock(path: Path, *, create: bool) -> Iterator[None]:
+    flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
+    if create:
+        flags |= os.O_CREAT
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except OSError as exc:
+        raise StateError(f"cannot open lock: {path}") from exc
+    try:
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def locked_service(
+    layout: RuntimeLayout,
+    service_id: str,
+    *,
+    create: bool = True,
+) -> Iterator[None]:
+    if create:
+        _prepare_service(layout, service_id)
+    with _exclusive_lock(layout.state_lock(service_id), create=create):
+        yield
+
+
+@contextmanager
+def locked_registry(layout: RuntimeLayout) -> Iterator[None]:
+    _ensure_private_directory(layout.state_root)
+    _ensure_private_directory(layout.services_root)
+    with _exclusive_lock(layout.registry_lock, create=True):
+        yield
+
+
 def _read_request(layout: RuntimeLayout, service_id: str) -> ServiceRequest:
     try:
         return ServiceRequest.from_dict(_read_json(layout.request_path(service_id)))
@@ -146,115 +197,104 @@ def _read_runtime(layout: RuntimeLayout, service_id: str) -> RuntimeState:
         raise StateError("runtime file violates its schema") from exc
 
 
-@contextmanager
-def _exclusive_lock(path: Path, *, create: bool) -> Iterator[None]:
-    flags = os.O_RDWR | os.O_CLOEXEC
-    if create:
-        flags |= os.O_CREAT
-    flags |= os.O_NOFOLLOW
-    try:
-        descriptor = os.open(path, flags, 0o600)
-    except OSError as exc:
-        raise StateError(f"cannot open lock: {path}") from exc
-    try:
-        os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(descriptor)
+def read_request(layout: RuntimeLayout, service_id: str) -> ServiceRequest:
+    return _read_request(layout, service_id)
 
 
-def reserve_request(
+def read_runtime(
     layout: RuntimeLayout,
-    candidate: CandidateRequest,
-    caller: CallerIdentity,
-    *,
-    request_id: str,
-) -> ServiceRequest:
-    request = ServiceRequest.pending(candidate, caller, request_id)
-    _prepare_layout(layout)
-    service_directory = layout.service_directory(candidate.service_id)
+    service_id: str,
+) -> RuntimeState | None:
     try:
-        service_directory.mkdir(mode=0o700)
-    except FileExistsError as exc:
-        raise StateError(
-            f"service is already reserved: {candidate.service_id}"
-        ) from exc
-    os.chmod(service_directory, 0o700)
-    try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
-        flags |= os.O_NOFOLLOW
-        lock_descriptor = os.open(
-            layout.state_lock(candidate.service_id),
-            flags,
-            0o600,
-        )
+        layout.runtime_path(service_id).lstat()
+    except FileNotFoundError:
+        return None
+    return _read_runtime(layout, service_id)
+
+
+def reserve_request(layout: RuntimeLayout, request: ServiceRequest) -> None:
+    with locked_service(layout, request.service_id):
         try:
-            os.fchmod(lock_descriptor, 0o600)
-        finally:
-            os.close(lock_descriptor)
+            layout.request_path(request.service_id).lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise StateError(f"service is already reserved: {request.service_id}")
         _atomic_write_json(
-            layout.request_path(candidate.service_id),
+            layout.request_path(request.service_id),
             request.to_dict(),
             0o600,
         )
-    except BaseException:
-        layout.request_path(candidate.service_id).unlink(missing_ok=True)
-        layout.state_lock(candidate.service_id).unlink(missing_ok=True)
-        service_directory.rmdir()
-        raise
-    return request
 
 
-def claim_request(
+def attach_supervisor(
     layout: RuntimeLayout,
     service_id: str,
-    *,
-    invocation_id: str,
+    request_id: str,
+    supervisor: ProcessIdentity,
 ) -> ServiceRequest:
-    with _exclusive_lock(layout.state_lock(service_id), create=False):
+    with locked_service(layout, service_id, create=False):
         request = _read_request(layout, service_id)
-        claimed = request.claimed(invocation_id)
+        if request.request_id != request_id:
+            raise StateError("request ownership changed before supervisor attachment")
+        if request.supervisor is not None:
+            raise StateError("request already has a supervisor")
+        if request.cancellation_requested:
+            raise StateError("request was cancelled before supervisor attachment")
+        updated = ServiceRequest(
+            request_id=request.request_id,
+            candidate=request.candidate,
+            starter=request.starter,
+            supervisor=supervisor,
+            cancellation_requested=False,
+        )
         _atomic_write_json(
             layout.request_path(service_id),
-            claimed.to_dict(),
+            updated.to_dict(),
             0o600,
         )
-        return claimed
+        return updated
 
 
-def discard_pending(
+def request_cancellation(
     layout: RuntimeLayout,
     service_id: str,
-    *,
     request_id: str,
-) -> bool:
-    service_directory = layout.service_directory(service_id)
-    if not service_directory.exists():
-        return False
-    with _exclusive_lock(layout.state_lock(service_id), create=False):
+) -> ServiceRequest:
+    """Atomically prevent an unclaimed startup from publishing runtime state."""
+
+    with locked_service(layout, service_id, create=False):
         request = _read_request(layout, service_id)
-        if request.state != "pending" or request.request_id != request_id:
-            return False
-        _unlink(layout.request_path(service_id))
-    _unlink(layout.state_lock(service_id))
-    try:
-        service_directory.rmdir()
-    except OSError as exc:
-        raise StateError(
-            f"service directory is not empty: {service_directory}"
-        ) from exc
-    _fsync_directory(layout.services_root)
-    return True
+        if request.request_id != request_id:
+            raise StateError("request ownership changed before cancellation")
+        if request.cancellation_requested:
+            return request
+        updated = ServiceRequest(
+            request_id=request.request_id,
+            candidate=request.candidate,
+            starter=request.starter,
+            supervisor=request.supervisor,
+            cancellation_requested=True,
+        )
+        _atomic_write_json(
+            layout.request_path(service_id),
+            updated.to_dict(),
+            0o600,
+        )
+        return updated
 
 
-def _reserved_ports(layout: RuntimeLayout) -> frozenset[int]:
+def reserved_ports(layout: RuntimeLayout) -> frozenset[int]:
     ports: set[int] = set()
+    if not layout.services_root.exists():
+        return frozenset()
     for service_directory in layout.services_root.iterdir():
-        if not service_directory.is_dir():
+        if service_directory.is_symlink() or not service_directory.is_dir():
             continue
         runtime_path = service_directory / "runtime.json"
-        if not runtime_path.exists():
+        try:
+            runtime_path.lstat()
+        except FileNotFoundError:
             continue
         try:
             runtime = RuntimeState.from_dict(_read_json(runtime_path))
@@ -266,47 +306,42 @@ def _reserved_ports(layout: RuntimeLayout) -> frozenset[int]:
     return frozenset(ports)
 
 
-def allocate_and_publish(
+def publish_runtime(
     layout: RuntimeLayout,
     request: ServiceRequest,
-    *,
-    pid: int,
-) -> RuntimeState:
-    if request.state != "claimed" or request.invocation_id is None:
-        raise StateError("request must be claimed before publishing")
-    _prepare_layout(layout)
-    with _exclusive_lock(layout.registry_lock, create=True):
-        with _exclusive_lock(
-            layout.state_lock(request.service_id),
-            create=False,
+    runtime: RuntimeState,
+) -> None:
+    if runtime.request_id != request.request_id:
+        raise StateError("runtime request ID does not match request")
+    if runtime.service_id != request.service_id:
+        raise StateError("runtime service ID does not match request")
+    _require_target_root(layout)
+    with locked_service(layout, request.service_id, create=False):
+        current = _read_request(layout, request.service_id)
+        if current != request:
+            raise StateError("request changed before runtime publication")
+        if (
+            request.cancellation_requested
+            or request.supervisor is None
+            or request.supervisor != runtime.supervisor
         ):
-            current = _read_request(layout, request.service_id)
-            if current != request:
-                raise StateError("request changed before endpoint publication")
-            endpoint = allocate_endpoint(
-                request.candidate.listen_host,
-                request.candidate.port_policy,
-                reserved_ports=_reserved_ports(layout),
-            )
-            runtime = RuntimeState(
-                request_id=request.request_id,
-                invocation_id=request.invocation_id,
-                service_id=request.service_id,
-                pid=pid,
-                listen_host=endpoint.listen_host,
-                scrape_host=endpoint.scrape_host,
-                port=endpoint.port,
-            )
-            target = [
-                {
-                    "targets": [endpoint.prometheus_target],
-                    "labels": {
-                        "service_id": request.service_id,
-                        "role": request.candidate.role,
-                        "model_alias": request.candidate.model_alias,
-                    },
-                }
-            ]
+            raise StateError("runtime publication requires the claimed supervisor")
+        endpoint = Endpoint(
+            listen_host=runtime.listen_host,
+            scrape_host=runtime.scrape_host,
+            port=runtime.port,
+        )
+        target = [
+            {
+                "targets": [endpoint.prometheus_target],
+                "labels": {
+                    "service_id": request.service_id,
+                    "role": request.candidate.role,
+                    "model_alias": request.candidate.model_alias,
+                },
+            }
+        ]
+        try:
             _atomic_write_json(
                 layout.runtime_path(request.service_id),
                 runtime.to_dict(),
@@ -317,84 +352,36 @@ def allocate_and_publish(
                 target,
                 0o644,
             )
-            _atomic_write_json(
-                layout.request_path(request.service_id),
-                request.published().to_dict(),
-                0o600,
-            )
-            return runtime
+        except BaseException:
+            _unlink(layout.target_path(request.service_id))
+            _unlink(layout.runtime_path(request.service_id))
+            raise
 
 
-def _unlink(path: Path) -> None:
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
-    _fsync_directory(path.parent)
-
-
-def cleanup_invocation(
+def cleanup_service(
     layout: RuntimeLayout,
     service_id: str,
     *,
-    invocation_id: str,
+    expected_request_id: str,
 ) -> bool:
-    service_directory = layout.service_directory(service_id)
-    if not service_directory.exists():
-        return False
-    _prepare_layout(layout)
-    with _exclusive_lock(layout.registry_lock, create=True):
-        if not service_directory.exists():
-            return False
-        with _exclusive_lock(layout.state_lock(service_id), create=False):
-            request = _read_request(layout, service_id)
-            if request.invocation_id != invocation_id:
-                return False
-            runtime_path = layout.runtime_path(service_id)
-            if runtime_path.exists():
-                runtime = _read_runtime(layout, service_id)
-                if (
-                    runtime.request_id != request.request_id
-                    or runtime.invocation_id != invocation_id
-                    or runtime.service_id != service_id
-                ):
-                    raise StateError("runtime ownership does not match request")
-            _unlink(layout.target_path(service_id))
-            _unlink(runtime_path)
-            _unlink(layout.request_path(service_id))
-
-    _unlink(layout.state_lock(service_id))
     try:
-        service_directory.rmdir()
-    except OSError as exc:
-        raise StateError(
-            f"service directory is not empty: {service_directory}"
-        ) from exc
-    _fsync_directory(layout.services_root)
-    return True
-
-
-def read_request(
-    layout: RuntimeLayout,
-    service_id: str,
-) -> ServiceRequest:
-    return _read_request(layout, service_id)
-
-
-@contextmanager
-def locked_request(
-    layout: RuntimeLayout,
-    service_id: str,
-) -> Iterator[ServiceRequest]:
-    with _exclusive_lock(layout.state_lock(service_id), create=False):
-        yield _read_request(layout, service_id)
-
-
-def read_runtime(
-    layout: RuntimeLayout,
-    service_id: str,
-) -> RuntimeState | None:
-    path = layout.runtime_path(service_id)
-    if not path.exists():
-        return None
-    return _read_runtime(layout, service_id)
+        layout.service_directory(service_id).lstat()
+    except FileNotFoundError:
+        return False
+    with locked_registry(layout):
+        with locked_service(layout, service_id, create=False):
+            try:
+                request = _read_request(layout, service_id)
+            except StateError:
+                if layout.request_path(service_id).exists():
+                    raise
+                return False
+            if request.request_id != expected_request_id:
+                return False
+            runtime = read_runtime(layout, service_id)
+            if runtime is not None and runtime.request_id != request.request_id:
+                raise StateError("runtime ownership does not match request")
+            _unlink(layout.target_path(service_id))
+            _unlink(layout.runtime_path(service_id))
+            _unlink(layout.request_path(service_id))
+            return True

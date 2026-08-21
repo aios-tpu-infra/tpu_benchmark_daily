@@ -81,12 +81,41 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("max sequences:           64", dp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", dp.stdout)
         self.assertIn("skip padded MoE tokens:  1", dp.stdout)
+        self.assertIn("MoE collection chunk size: 16384", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           64", pcp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("skip padded MoE tokens:  0", pcp.stdout)
+        self.assertIn("MoE collection chunk size: 0", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
+
+    def test_prefill_server_supports_moe_chunk_size_override(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={"TPU_MOE_COLLECTION_CHUNK_SIZE": "8192"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MoE collection chunk size: 8192", result.stdout)
+
+    def test_prefill_server_validates_moe_chunk_size(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={"TPU_MOE_COLLECTION_CHUNK_SIZE": "invalid"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "TPU_MOE_COLLECTION_CHUNK_SIZE must be a non-negative integer",
+            result.stderr,
+        )
 
     def test_prefill_wrapper_config_ignores_inherited_config(self) -> None:
         result = self.run_script(

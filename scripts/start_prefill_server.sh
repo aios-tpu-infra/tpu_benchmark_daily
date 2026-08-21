@@ -59,6 +59,7 @@ case "$BENCHMARK_CONFIG" in
     COMPILE_SIZES="${COMPILE_SIZES:-512,1024,2048,4096}"
     LONG_PREFILL_TOKEN_THRESHOLD=
     TPU_MOE_SKIP_PADDED_TOKENS="${TPU_MOE_SKIP_PADDED_TOKENS:-1}"
+    TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-16384}"
     ;;
   pcp8)
     CONFIG_LABEL=PCP8
@@ -70,6 +71,7 @@ case "$BENCHMARK_CONFIG" in
     COMPILE_SIZES="${COMPILE_SIZES:-512,1024,2048,4096}"
     LONG_PREFILL_TOKEN_THRESHOLD="${LONG_PREFILL_TOKEN_THRESHOLD:-32768}"
     TPU_MOE_SKIP_PADDED_TOKENS="${TPU_MOE_SKIP_PADDED_TOKENS:-0}"
+    TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-0}"
     ;;
   *)
     echo "ERROR: --config must be dp8 or pcp8, got '$BENCHMARK_CONFIG'." >&2
@@ -127,6 +129,10 @@ case "${TPU_MOE_SKIP_PADDED_TOKENS,,}" in
     exit 2
     ;;
 esac
+if [[ ! "$TPU_MOE_COLLECTION_CHUNK_SIZE" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: TPU_MOE_COLLECTION_CHUNK_SIZE must be a non-negative integer, got '$TPU_MOE_COLLECTION_CHUNK_SIZE'." >&2
+  exit 2
+fi
 case "${TPU_PARALLEL_PRECOMPILE,,}" in
   1|true) TPU_PARALLEL_PRECOMPILE=1 ;;
   0|false) TPU_PARALLEL_PRECOMPILE=0 ;;
@@ -146,6 +152,7 @@ if (( TEST_ONLY )); then
   echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
   echo "premapped buffer size:   $TPU_PREMAPPED_BUFFER_SIZE"
   echo "skip padded MoE tokens:  $TPU_MOE_SKIP_PADDED_TOKENS"
+  echo "MoE collection chunk size: $TPU_MOE_COLLECTION_CHUNK_SIZE"
   if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
     echo "long prefill threshold:  $LONG_PREFILL_TOKEN_THRESHOLD"
   fi
@@ -184,10 +191,10 @@ TORCH_TPU_VERSION=$(
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
 case "$BENCHMARK_CONFIG" in
   dp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
   pcp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
 esac
 
@@ -211,6 +218,7 @@ export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
 export TPU_VLLM_SKIP_DYNAMIC_SMEM_NEGOTIATION_FLAG=1
 export RAGGED_GATHER_REDUCE_VERSION=v3
 export TPU_MOE_SKIP_PADDED_TOKENS
+export TPU_MOE_COLLECTION_CHUNK_SIZE
 export VLLM_ENGINE_READY_TIMEOUT_S
 
 # Keep every configurable compilation cache on project storage. By default the
@@ -356,6 +364,7 @@ echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
 echo "unified block pool: enabled (block size auto-derived)"
 echo "skip padded MoE tokens: $TPU_MOE_SKIP_PADDED_TOKENS"
+echo "MoE collection chunk size: $TPU_MOE_COLLECTION_CHUNK_SIZE"
 
 ensure_uv_on_path
 ensure_vllm_service_launcher "$VLLM_SERVICE_LAUNCH"

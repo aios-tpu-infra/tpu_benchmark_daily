@@ -87,7 +87,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("max sequences:           64", pcp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("skip padded MoE tokens:  0", pcp.stdout)
-        self.assertIn("MoE collection chunk size: 0", pcp.stdout)
+        self.assertIn("MoE collection chunk size: 16384", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 
     def test_prefill_server_supports_moe_chunk_size_override(self) -> None:

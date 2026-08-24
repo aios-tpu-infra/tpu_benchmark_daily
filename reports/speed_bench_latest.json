@@ -1,31 +1,31 @@
 {
   "benchmark": {
     "benchmark_config": "pcp8",
-    "completed_at": "2026-08-22T00:06:48+00:00",
+    "completed_at": "2026-08-22T05:02:45+00:00",
     "concurrency_results": [
       {
         "concurrency": 8,
-        "input_token_throughput": 43433.50425331208,
-        "request_throughput": 3.9615699661257073,
+        "input_token_throughput": 44425.15220673195,
+        "request_throughput": 4.05201817694302,
         "status": "success",
-        "total_token_throughput": 43437.4658232782,
-        "ttft_p50_ms": 1944.0573929459788,
-        "ttft_p90_ms": 2840.7349079614505,
-        "ttft_p99_ms": 3973.4366390120704
+        "total_token_throughput": 44429.2042249089,
+        "ttft_p50_ms": 1892.2876765136607,
+        "ttft_p90_ms": 2755.523627321236,
+        "ttft_p99_ms": 3671.7274981655637
       },
       {
         "concurrency": 64,
-        "input_token_throughput": 47361.31430361614,
-        "request_throughput": 4.319825524718926,
+        "input_token_throughput": 48390.090089635996,
+        "request_throughput": 4.413660165184595,
         "status": "success",
-        "total_token_throughput": 47365.63412914086,
-        "ttft_p50_ms": 14553.014706471004,
-        "ttft_p90_ms": 17292.70124156028,
-        "ttft_p99_ms": 18615.592795268167
+        "total_token_throughput": 48394.50374980118,
+        "ttft_p50_ms": 14267.606775974855,
+        "ttft_p90_ms": 16902.78805377893,
+        "ttft_p99_ms": 18142.51350299688
       }
     ],
     "dataset_sha256": "f16a7f760630fbcd0b5ebcc706236adbe3c47cff63cf10e9f194c156cc70585e",
-    "input_token_throughput": 47361.31430361614,
+    "input_token_throughput": 48390.090089635996,
     "machine_ip": "10.42.24.15",
     "max_input_tokens": 37719,
     "mean_input_tokens": 10963.71,
@@ -34,8 +34,8 @@
     "model": "Qwen3.5-397B-A17B-FP8",
     "num_prompts": 1000,
     "output_length": 1,
-    "request_throughput": 4.319825524718926,
-    "run_id": "20260821T233307Z",
+    "request_throughput": 4.413660165184595,
+    "run_id": "20260822T042543Z",
     "serial_mean_ttft_ms": null,
     "serial_median_ttft_ms": null,
     "serial_p90_ttft_ms": null,
@@ -44,18 +44,18 @@
     "serial_ttft_status": "not-run",
     "source": "nvidia/SPEED-Bench",
     "source_revision": "487aa718444e816458d1a0a52bfce7a454285cf4",
-    "started_at": "2026-08-21T23:33:07+00:00",
+    "started_at": "2026-08-22T04:25:43+00:00",
     "status": "success",
-    "summary_path": "runs/20260821T233307Z/results/pcp8/speed_bench_mix/summary.json",
+    "summary_path": "runs/20260822T042543Z/results/pcp8/speed_bench_mix/summary.json",
     "throughput_concurrency": 64,
-    "throughput_median_ttft_ms": 14553.014706471004,
-    "throughput_p90_ttft_ms": 17292.70124156028,
-    "throughput_p99_ttft_ms": 18615.592795268167,
+    "throughput_median_ttft_ms": 14267.606775974855,
+    "throughput_p90_ttft_ms": 16902.78805377893,
+    "throughput_p99_ttft_ms": 18142.51350299688,
     "throughput_status": "success",
     "torch_tpu_version": "0.1.1.dev20260813160135",
-    "torchtpu_vllm_revision": "99a73108f7a9f3371a5cee45bd25e62080498b22",
+    "torchtpu_vllm_revision": "ec384c75cfe5469639c36d115283abb6d8bef172",
     "total_input_tokens": 10963710,
-    "total_token_throughput": 47365.63412914086
+    "total_token_throughput": 48394.50374980118
   },
   "schema_version": 1
 }

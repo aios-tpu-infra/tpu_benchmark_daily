@@ -178,16 +178,6 @@ def iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="seconds")
 
 
-def benchmark_timestamp(value: Any) -> str | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.strptime(value, "%Y%m%d-%H%M%S").replace(tzinfo=UTC)
-    except ValueError:
-        return None
-    return iso_utc(parsed)
-
-
 def run_id_timestamp(run_id: str) -> str | None:
     match = re.search(r"(\d{8}T\d{6}Z)$", run_id)
     if match is None:
@@ -502,7 +492,11 @@ def build_record(
         )
     else:
         fallback_completed_at = iso_utc(datetime.now(tz=UTC))
-    completed_at = benchmark_timestamp(detail.get("date")) or fallback_completed_at
+    # vLLM's detail ``date`` is a timezone-less local wall-clock value.  Using
+    # it as UTC shifts reports on non-UTC hosts and can make a completed run
+    # appear to be in the future.  The summary mtime is an absolute timestamp
+    # and is therefore the reliable completion-time source.
+    completed_at = fallback_completed_at
 
     concurrency_results = []
     if status == "success":

@@ -15,7 +15,7 @@ SPEED-Bench 快照的 4,194 条有效请求中，以 seed 42 全局随机选取 
 默认分别在并发度 8 和 64 下记录 input/total token 吞吐，以及相同负载下的
 TTFT P50/P90/P99。
 
-三组服务统一从项目内 `models/Qwen3.5-397B-A17B-FP8` 加载完整 checkpoint，
+三组服务统一加载完整的 `Qwen3.5-397B-A17B-FP8` checkpoint，
 不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
 直接比较，报告历史已从首轮真实权重测试 `20260728T012922Z` 重新开始。
 
@@ -201,10 +201,11 @@ target_root=/run/vllm-metrics-targets/targets
 详细生命周期、异常恢复、安装 staging 和 fake-server 复现方式见
 [`vendor/vllm-service-launch/README.md`](vendor/vllm-service-launch/README.md)。
 
-完整 daily run 要求 `models/Qwen3.5-397B-A17B-FP8` 中存在真实模型权重。
-权重文件由环境在本地提供并被 Git 忽略；`--prepare-only` 只执行
-config/tokenizer 元数据检查，三个启动脚本加载服务时会由模型加载器验证
-权重是否完整。
+完整 daily run 优先使用项目内
+`models/Qwen3.5-397B-A17B-FP8` 的真实模型权重；若其中只有随仓库保存的
+config/tokenizer 元数据，则自动使用同级 workspace 下共享的
+`../models/Qwen3.5-397B-A17B-FP8`。也可以用 `MODEL_DIR` 显式覆盖。脚本会在
+安装环境和启动服务前检查 safetensors 权重索引，避免等到 worker 启动后才失败。
 
 The installer deliberately uses `gcloud auth print-access-token` instead of
 Application Default Credentials because these can represent different users or
@@ -375,9 +376,10 @@ The DP8 and PCP8 prefill launchers default to `--max-model-len 262144`.
 The longest TTFT input is 258048 tokens (252K), leaving room for the one-token
 output within the model's 262144-token context limit.
 
-All three services use `models/Qwen3.5-397B-A17B-FP8` as their model
-directory and load the real checkpoint from that directory with vLLM's default
-automatic load format.
+All three services prefer `models/Qwen3.5-397B-A17B-FP8` when it contains the
+real checkpoint, otherwise they use the sibling workspace's shared
+`../models/Qwen3.5-397B-A17B-FP8`. `MODEL_DIR` overrides both choices. vLLM
+loads the selected checkpoint with its default automatic load format.
 
 Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 `cache_salt`，因此
 不依赖 prefix cache 的跨请求复用；client 通过 `X-data-parallel-rank` 将

@@ -15,7 +15,17 @@ VLLM_SERVICE_LAYOUT_ARGS=(
 )
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
+REPOSITORY_MODEL_DIR="$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8"
+SHARED_MODEL_DIR="$PROJECT_ROOT/../models/Qwen3.5-397B-A17B-FP8"
+if [[ -z "${MODEL_DIR:-}" ]]; then
+  if [[ -f "$REPOSITORY_MODEL_DIR/model.safetensors.index.json" ]]; then
+    MODEL_DIR=$REPOSITORY_MODEL_DIR
+  elif [[ -f "$SHARED_MODEL_DIR/model.safetensors.index.json" ]]; then
+    MODEL_DIR=$SHARED_MODEL_DIR
+  else
+    MODEL_DIR=$REPOSITORY_MODEL_DIR
+  fi
+fi
 PORT="${PORT:-18100}"
 SERVER_READY_TIMEOUT="${SERVER_READY_TIMEOUT:-3600}"
 SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-120}"
@@ -504,6 +514,12 @@ EOF
   echo "TEST_ONLY preview README: $TEST_PROJECT_ROOT/README.md"
   echo "TEST_ONLY preview reports: $TEST_PROJECT_ROOT/reports"
   exit 0
+fi
+
+if [[ ! -f "$MODEL_DIR/model.safetensors.index.json" ]]; then
+  echo "ERROR: model weight index is missing: $MODEL_DIR/model.safetensors.index.json" >&2
+  echo "Set MODEL_DIR to the complete Qwen3.5-397B-A17B-FP8 checkpoint." >&2
+  exit 1
 fi
 
 if (( ! PREPARE_ONLY )); then

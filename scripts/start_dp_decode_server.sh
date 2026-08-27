@@ -28,7 +28,17 @@ done
 
 VENV_DIR="${VENV_DIR:-$PROJECT_ROOT/.venv}"
 TORCHTPU_DIR="${TORCHTPU_DIR:-$PROJECT_ROOT/third_party/torchtpu-vllm}"
-MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
+REPOSITORY_MODEL_DIR="$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8"
+SHARED_MODEL_DIR="$PROJECT_ROOT/../models/Qwen3.5-397B-A17B-FP8"
+if [[ -z "${MODEL_DIR:-}" ]]; then
+  if [[ -f "$REPOSITORY_MODEL_DIR/model.safetensors.index.json" ]]; then
+    MODEL_DIR=$REPOSITORY_MODEL_DIR
+  elif [[ -f "$SHARED_MODEL_DIR/model.safetensors.index.json" ]]; then
+    MODEL_DIR=$SHARED_MODEL_DIR
+  else
+    MODEL_DIR=$REPOSITORY_MODEL_DIR
+  fi
+fi
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
@@ -145,6 +155,10 @@ if [[ ! -d "$TORCHTPU_DIR/src/vllm_torchtpu" ]]; then
 fi
 if [[ ! -f "$MODEL_DIR/config.json" || ! -f "$MODEL_DIR/tokenizer.json" ]]; then
   echo "ERROR: local model metadata is incomplete: $MODEL_DIR" >&2
+  exit 1
+fi
+if [[ ! -f "$MODEL_DIR/model.safetensors.index.json" ]]; then
+  echo "ERROR: local model weights are incomplete: $MODEL_DIR" >&2
   exit 1
 fi
 

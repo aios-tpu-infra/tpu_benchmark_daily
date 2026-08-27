@@ -56,7 +56,7 @@ class UpdateReportTest(unittest.TestCase):
         self.assertIn("| -1.00 | — | — | — | — |", block)
 
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
-        self.assertEqual(latest["schema_version"], 8)
+        self.assertEqual(latest["schema_version"], 9)
         self.assertEqual(latest["benchmarks"]["dp8"]["status"], "failed")
         self.assertEqual(
             latest["benchmarks"]["dp8"]["total_token_throughput"],
@@ -117,6 +117,12 @@ class UpdateReportTest(unittest.TestCase):
         self.assertIn("Recent DP4/TP2 decode throughput", block)
         self.assertIn("DP4/TP2 decode tok/s", block)
         self.assertIn("DP4/TP2/EP8 C256 peak-active P50", block)
+        latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
+        self.assertEqual(latest["prefill_benchmarks"], {})
+        self.assertEqual(latest["decode"]["run_id"], "decode-only")
+        self.assertEqual(
+            latest["decode"]["decode_window_p50_throughput"], 3900.0
+        )
 
     def test_schema3_decode_metrics_migrate_without_changing_protocol(self) -> None:
         history = {
@@ -162,6 +168,25 @@ class UpdateReportTest(unittest.TestCase):
             updated[UPDATE_REPORT.LEGACY_DECODE_TPOT_FIELD],
             18.4131,
         )
+
+    def test_decode_only_record_does_not_replace_latest_prefill(self) -> None:
+        prefill_record = {
+            "run_id": "prefill",
+            "benchmark_config": "dp8",
+            "status": "success",
+        }
+        decode_record = {
+            "run_id": "decode",
+            "benchmark_config": "dp8",
+            "status": "not-run",
+            "decode_status": "success",
+        }
+
+        latest = UPDATE_REPORT.latest_prefill_runs_by_config(
+            [prefill_record, decode_record]
+        )
+
+        self.assertEqual(latest["dp8"]["run_id"], "prefill")
 
     def test_decode_history_only_shows_dp4_tp2_and_keeps_metrics_separate(
         self,

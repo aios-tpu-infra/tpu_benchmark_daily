@@ -32,16 +32,21 @@ MODEL_DIR="${MODEL_DIR:-$PROJECT_ROOT/models/Qwen3.5-397B-A17B-FP8}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-Qwen3.5-397B-A17B-FP8}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-18100}"
-SERVICE_ID=tpu-daily-dp8-decode-c256
+SERVICE_ID=tpu-daily-dp4-tp2-decode-c256
 ROLE=decode
 VLLM_SERVICE_LAUNCH="${VLLM_SERVICE_LAUNCH:-$PROJECT_ROOT/vendor/vllm-service-launch/bin/vllm-service-launch}"
 VLLM_SERVICE_STATE_ROOT="${VLLM_SERVICE_STATE_ROOT:-$PROJECT_ROOT/.state/vllm-service-launch}"
 VLLM_SERVICE_TARGET_ROOT="${VLLM_SERVICE_TARGET_ROOT:-/run/vllm-metrics-targets/targets}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-66560}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-4096}"
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.932285943}"
-COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4096}"
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
+BLOCK_SIZE="${BLOCK_SIZE:-2304}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
+COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,64,72,4096}"
+MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-bfloat16}"
+TPU_GDN_BF16_STATE_IO_MODE="${TPU_GDN_BF16_STATE_IO_MODE:-u32_128_fused_global_halves_initialized_decode}"
+RAGGED_GATHER_REDUCE_VERSION="${RAGGED_GATHER_REDUCE_VERSION:-v2}"
+TPU_MOE_OWNER_OUTPUT_MODE="${TPU_MOE_OWNER_OUTPUT_MODE:-on}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
 RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"
 TPU_PARALLEL_PRECOMPILE="${TPU_PARALLEL_PRECOMPILE:-1}"
@@ -61,6 +66,7 @@ for value_name in \
     MAX_MODEL_LEN \
     MAX_NUM_BATCHED_TOKENS \
     MAX_NUM_SEQS \
+    BLOCK_SIZE \
     TPU_PREMAPPED_BUFFER_SIZE \
     VLLM_ENGINE_READY_TIMEOUT_S; do
   require_uint "$value_name" "${!value_name}"
@@ -71,6 +77,38 @@ if [[ ! "$GPU_MEMORY_UTILIZATION" =~ ^0\.[0-9]+$ ]]; then
 fi
 if [[ "$RESET_COMPILE_CACHE" != 0 && "$RESET_COMPILE_CACHE" != 1 ]]; then
   echo "ERROR: RESET_COMPILE_CACHE must be 0 or 1." >&2
+  exit 2
+fi
+case "$RAGGED_GATHER_REDUCE_VERSION" in
+  v1|v2|v3) ;;
+  *)
+    echo "ERROR: RAGGED_GATHER_REDUCE_VERSION must be v1, v2, or v3, got '$RAGGED_GATHER_REDUCE_VERSION'." >&2
+    exit 2
+    ;;
+esac
+case "$TPU_MOE_OWNER_OUTPUT_MODE" in
+  off|on) ;;
+  *)
+    echo "ERROR: TPU_MOE_OWNER_OUTPUT_MODE must be off or on, got '$TPU_MOE_OWNER_OUTPUT_MODE'." >&2
+    exit 2
+    ;;
+esac
+case "$MAMBA_SSM_CACHE_DTYPE" in
+  bfloat16|float32) ;;
+  *)
+    echo "ERROR: MAMBA_SSM_CACHE_DTYPE must be bfloat16 or float32, got '$MAMBA_SSM_CACHE_DTYPE'." >&2
+    exit 2
+    ;;
+esac
+case "$TPU_GDN_BF16_STATE_IO_MODE" in
+  legacy|u32_128_fused_global_halves_initialized_decode) ;;
+  *)
+    echo "ERROR: TPU_GDN_BF16_STATE_IO_MODE has unsupported value '$TPU_GDN_BF16_STATE_IO_MODE'." >&2
+    exit 2
+    ;;
+esac
+if [[ "$TPU_GDN_BF16_STATE_IO_MODE" != legacy && "$MAMBA_SSM_CACHE_DTYPE" != bfloat16 ]]; then
+  echo "ERROR: optimized GDN state I/O requires MAMBA_SSM_CACHE_DTYPE=bfloat16." >&2
   exit 2
 fi
 case "${TPU_PARALLEL_PRECOMPILE,,}" in
@@ -87,7 +125,7 @@ if [[ "$TEST_ONLY" != 0 && "$TEST_ONLY" != 1 ]]; then
   exit 2
 fi
 if (( TEST_ONLY )); then
-  echo "TEST_ONLY: DP8 decode server startup skipped."
+  echo "TEST_ONLY: DP4/TP2 decode server startup skipped."
   printf 'extra vLLM args:'
   if (( ${#extra_vllm_args[@]} > 0 )); then
     printf ' %q' "${extra_vllm_args[@]}"
@@ -116,9 +154,12 @@ TORCH_TPU_VERSION=$(
     'from importlib.metadata import version; print(version("torch-tpu"))'
 )
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
-CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_c256_dp8_tp1"
+CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_c256_dp4_tp2"
 CACHE_KEY+="_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}"
-CACHE_KEY+="_mns${MAX_NUM_SEQS}_gmu${GPU_MEMORY_UTILIZATION}"
+CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
+CACHE_KEY+="_ssm${MAMBA_SSM_CACHE_DTYPE}"
+CACHE_KEY+="_gdnio${TPU_GDN_BF16_STATE_IO_MODE}"
+CACHE_KEY+="_rpalongctx_seq_lane_owner${TPU_MOE_OWNER_OUTPUT_MODE}_noprefix"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
 
 export PYTHONPATH="$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -149,12 +190,16 @@ export RAY_memory_monitor_refresh_ms=0
 export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1
 unset TPU_VLLM_KV_CACHE_ALIAS_FALLBACK
 export TPU_KV_CACHE_HEADROOM_MIB=6144
+unset USE_BATCHED_RPA_KERNEL
 export USE_BATCHED_RPA_LONGCTX=1
+export USE_BATCHED_RPA_SEQ_ON_LANE=1
 export RAGGED_GATED_DELTA_RULE_IMPL=chunked_kernel_v3_pd
+export TPU_GDN_BF16_STATE_IO_MODE
 
 export USE_MOE_SPARSE_CORE=1
 export RAGGED_GATHER_VERSION=v2
-export RAGGED_GATHER_REDUCE_VERSION=v2
+export RAGGED_GATHER_REDUCE_VERSION
+export TPU_MOE_OWNER_OUTPUT_MODE
 export ONEHOT_MOE_PERMUTE_THRESHOLD=32768
 unset TPU_RAGGED_GATHER_REDUCE_IMPL
 unset TPU_RAGGED_GATHER_IMPL
@@ -276,8 +321,15 @@ COMPILATION_CONFIG=$(printf \
 echo "Starting real-weight $SERVED_MODEL_NAME from $MODEL_DIR"
 echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu version:       $TORCH_TPU_VERSION"
-echo "benchmark config:        dp8_decode_c256"
-echo "parallelism:             TP=1, DP=8, EP=8"
+echo "benchmark config:        dp4_tp2_decode_c256"
+echo "parallelism:             TP=2, DP=4, EP=8"
+echo "KV block size:           $BLOCK_SIZE (explicit)"
+echo "GDN SSM cache dtype:     $MAMBA_SSM_CACHE_DTYPE"
+echo "GDN BF16 state I/O:      $TPU_GDN_BF16_STATE_IO_MODE"
+echo "prefix caching:          disabled"
+echo "batched RPA:             longctx + seq_on_lane"
+echo "ragged gather-reduce:    $RAGGED_GATHER_REDUCE_VERSION"
+echo "MoE owner-output:        $TPU_MOE_OWNER_OUTPUT_MODE"
 echo "compile sizes:           $COMPILE_SIZES"
 echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
 echo "premapped buffer size:   $TPU_PREMAPPED_BUFFER_SIZE"
@@ -285,7 +337,7 @@ echo "compile cache:           $COMPILE_CACHE_ROOT ($COMPILE_CACHE_ACTION before
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path:  $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache:   disabled (no /dev/shm dependency)"
-echo "unified block pool:      enabled (block size auto-derived)"
+echo "unified block pool:      enabled (block size floor $BLOCK_SIZE)"
 
 ensure_uv_on_path
 ensure_vllm_service_launcher "$VLLM_SERVICE_LAUNCH"
@@ -304,14 +356,16 @@ exec "$VLLM_SERVICE_LAUNCH" start \
   --served-model-name "$SERVED_MODEL_NAME" \
   --trust-remote-code \
   --seed 42 \
-  --tensor-parallel-size 1 \
-  --data-parallel-size 8 \
-  --data-parallel-size-local 8 \
+  --tensor-parallel-size 2 \
+  --data-parallel-size 4 \
+  --data-parallel-size-local 4 \
   --enable-expert-parallel \
   --language-model-only \
-  --mamba-cache-mode align \
+  --mamba-cache-mode none \
+  --mamba-ssm-cache-dtype "$MAMBA_SSM_CACHE_DTYPE" \
   --no-disable-hybrid-kv-cache-manager \
   --kv-cache-dtype fp8 \
+  --block-size "$BLOCK_SIZE" \
   --max-model-len "$MAX_MODEL_LEN" \
   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
   --max-num-seqs "$MAX_NUM_SEQS" \

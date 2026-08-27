@@ -697,6 +697,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- 模型：`{benchmark['model']}`",
         f"- 并发：`{benchmark['concurrency']}`",
         f"- DP size：`{benchmark['data_parallel_size']}`",
+        f"- TP size：`{benchmark['tensor_parallel_size']}`",
         f"- Prefill：`{benchmark['prefill_tokens']}` tokens",
         f"- Decode：`{benchmark['decode_tokens']}` tokens",
         (
@@ -777,6 +778,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         "  --output-dir <OUTPUT_DIR> \\",
         f"  --concurrency {benchmark['concurrency']} \\",
         f"  --data-parallel-size {benchmark['data_parallel_size']} \\",
+        f"  --tensor-parallel-size {benchmark['tensor_parallel_size']} \\",
         f"  --prefill-tokens {benchmark['prefill_tokens']} \\",
         f"  --decode-tokens {benchmark['decode_tokens']} \\",
         f"  --tokenizer-dir {benchmark['tokenizer_dir']} \\",
@@ -828,7 +830,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="Qwen3.5-397B-A17B-FP8")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--concurrency", type=positive_int, default=16)
-    parser.add_argument("--data-parallel-size", type=positive_int, default=8)
+    parser.add_argument("--data-parallel-size", type=positive_int, default=4)
+    parser.add_argument("--tensor-parallel-size", type=positive_int, default=2)
     parser.add_argument("--prefill-tokens", type=positive_int, default=65536)
     parser.add_argument("--decode-tokens", type=positive_int, default=1024)
     parser.add_argument("--tokenizer-dir", type=Path, required=True)
@@ -963,11 +966,12 @@ def main() -> None:
         default=None,
     )
     summary = {
-        "schema_version": 6,
+        "schema_version": 7,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
             "benchmark_config": (
-                f"dp{args.data_parallel_size}_decode_c{args.concurrency}"
+                f"dp{args.data_parallel_size}_tp{args.tensor_parallel_size}"
+                f"_decode_c{args.concurrency}"
             ),
             "base_url": base_url,
             "model": args.model,
@@ -975,6 +979,7 @@ def main() -> None:
             "output_length": args.decode_tokens,
             "concurrency": args.concurrency,
             "data_parallel_size": args.data_parallel_size,
+            "tensor_parallel_size": args.tensor_parallel_size,
             "prefill_tokens": args.prefill_tokens,
             "decode_tokens": args.decode_tokens,
             "prompt_mode": "unique_natural_language_prefix_token_ids",

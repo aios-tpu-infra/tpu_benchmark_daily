@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
@@ -35,6 +35,7 @@ CSV_FIELDS = (
     "benchmark_config",
     "status",
     "decode_status",
+    "decode_parallelism",
     "started_at",
     "completed_at",
     "machine_ip",
@@ -66,6 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--decode-summary", type=Path)
+    parser.add_argument("--decode-parallelism")
     parser.add_argument("--ttft-summary", type=Path)
     parser.add_argument(
         "--status",
@@ -338,6 +340,7 @@ def build_record(
     model: str | None,
     benchmark_config: str | None,
     decode_summary_path: Path | None = None,
+    decode_parallelism: str | None = None,
     ttft_summary_path: Path | None = None,
     status: str = "success",
     decode_status: str = "not-run",
@@ -460,6 +463,16 @@ def build_record(
     metadata_path = run_dir / "run_metadata.json"
     metadata_exists = metadata_path.is_file()
     metadata = load_json(metadata_path) if metadata_exists else {}
+    if decode_status == "not-run":
+        normalized_decode_parallelism = None
+    else:
+        normalized_decode_parallelism = str(
+            decode_parallelism
+            or metadata.get("decode_parallelism")
+            or "DP8/TP1/EP8"
+        ).strip()
+        if not normalized_decode_parallelism:
+            raise ValueError("decode_parallelism must not be empty")
     configured_machine_ip = os.environ.get("MACHINE_IP")
     if configured_machine_ip:
         machine_ip = normalized_ip_address(configured_machine_ip, "MACHINE_IP")
@@ -545,6 +558,7 @@ def build_record(
         "benchmark_config": benchmark_config,
         "status": status,
         "decode_status": decode_status,
+        "decode_parallelism": normalized_decode_parallelism,
         "started_at": started_at,
         "completed_at": completed_at,
         "machine_ip": machine_ip,
@@ -589,7 +603,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, 4, 5, 6, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -647,6 +661,10 @@ def load_history(path: Path) -> list[dict[str, Any]]:
             else:
                 decode_status = "not-run"
         run["decode_status"] = decode_status
+        decode_parallelism = str(run.get("decode_parallelism") or "").strip()
+        if not decode_parallelism and decode_status != "not-run":
+            decode_parallelism = "DP8/TP1/EP8"
+        run["decode_parallelism"] = decode_parallelism or None
         ttft_status = str(run.get("prefill_ttft_status") or "").strip().lower()
         ttft_results = run.get("single_request_ttft_results")
         if not isinstance(ttft_results, list):
@@ -701,6 +719,7 @@ def update_history(
             LEGACY_DECODE_TPOT_FIELD,
             "decode_window_p50_throughput",
             "decode_peak_active_tpot_p50_ms",
+            "decode_parallelism",
         )
         record = {
             **record,
@@ -1028,6 +1047,7 @@ def decode_history_chart_data(
                 "x_index": index_by_run_id[str(run["run_id"])],
                 "value": run[field],
                 "tooltip": (
+                    f"{run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
                     f"{label} · {run['run_id']}: "
                     f"{run[field]:,.2f} tok/s"
                 ),
@@ -1169,6 +1189,7 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
         "benchmark_config": run["benchmark_config"],
         "status": run.get("status", "success"),
         "decode_status": run.get("decode_status", "not-run"),
+        "decode_parallelism": run.get("decode_parallelism"),
         "completed_at": run["completed_at"],
         "machine_ip": run["machine_ip"],
         "model": run["model"],
@@ -1435,11 +1456,17 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             dp_tpot_p50 = None
             decode_protocol = "failed"
         elif dp_decode is not None:
-            decode_protocol = "C256 peak-active P50"
+            decode_protocol = (
+                f"{dp_run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
+                "C256 peak-active P50"
+            )
         elif legacy_dp_decode is not None:
             dp_decode = legacy_dp_decode
             dp_tpot_p50 = legacy_dp_tpot
-            decode_protocol = "legacy peak/min"
+            decode_protocol = (
+                f"{dp_run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
+                "legacy peak/min"
+            )
         else:
             decode_protocol = "—"
         cells = [
@@ -1499,9 +1526,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "![Recent DP8 vs PCP8 peak throughput over time]"
             "(reports/throughput_history.svg)",
             "",
-            "Recent DP8 decode throughput over time:",
+            "Recent decode throughput over time:",
             "",
-            "![Recent DP8 decode throughput over time]"
+            "![Recent decode throughput over time]"
             "(reports/decode_throughput_history.svg)",
             "",
             *latest_lines,
@@ -1582,6 +1609,7 @@ def main() -> None:
                 if args.decode_summary is not None
                 else None
             ),
+            decode_parallelism=args.decode_parallelism,
             ttft_summary_path=(
                 args.ttft_summary.resolve()
                 if args.ttft_summary is not None
@@ -1655,7 +1683,7 @@ def main() -> None:
             )
         atomic_write(history_svg_path, history_svg)
         decode_history_title = (
-            f"DP8 decode throughput over time — last {decode_run_count} runs"
+            f"Decode throughput over time — last {decode_run_count} runs"
         )
         decode_history_description = (
             "Legacy peak-output throughput and current C256 peak-active "

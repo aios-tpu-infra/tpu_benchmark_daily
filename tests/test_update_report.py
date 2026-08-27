@@ -45,6 +45,7 @@ class UpdateReportTest(unittest.TestCase):
 
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["decode_status"], "failed")
+        self.assertEqual(record["decode_parallelism"], "DP8/TP1/EP8")
         self.assertEqual(record["best_total_token_throughput"], -1.0)
         self.assertEqual(record["decode_window_p50_throughput"], -1.0)
         self.assertIsNone(record["best_concurrency"])
@@ -55,7 +56,7 @@ class UpdateReportTest(unittest.TestCase):
         self.assertIn("| -1.00 | — | -1.00 | — | failed |", block)
 
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
-        self.assertEqual(latest["schema_version"], 7)
+        self.assertEqual(latest["schema_version"], 8)
         self.assertEqual(latest["benchmarks"]["dp8"]["status"], "failed")
         self.assertEqual(
             latest["benchmarks"]["dp8"]["total_token_throughput"],
@@ -103,13 +104,17 @@ class UpdateReportTest(unittest.TestCase):
                 model="Qwen3.5-397B-A17B-FP8",
                 benchmark_config="dp8",
                 decode_summary_path=decode_summary_path,
+                decode_parallelism="DP4/TP2/EP8",
                 status="not-run",
                 decode_status="success",
             )
 
         self.assertIsNone(record["best_total_token_throughput"])
+        self.assertEqual(record["decode_parallelism"], "DP4/TP2/EP8")
         self.assertEqual(record["decode_window_p50_throughput"], 3900.0)
         self.assertEqual(record["decode_peak_active_tpot_p50_ms"], 47.0)
+        block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
+        self.assertIn("DP4/TP2/EP8 C256 peak-active P50", block)
 
     def test_schema3_decode_metrics_migrate_without_changing_protocol(self) -> None:
         history = {

@@ -44,6 +44,17 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("--commit COMMIT", result.stdout)
         self.assertIn("--torchtpu-commit is an alias", result.stdout)
 
+    def test_decode_workflow_uses_latest_main_by_default(self) -> None:
+        script = DAILY_RUNNER.read_text(encoding="utf-8")
+
+        self.assertIn("TORCHTPU_COMMIT=\n", script)
+        self.assertIn("latest origin/main", script)
+        self.assertIn("dp4_tp2_decode_c256", script)
+        self.assertIn("--data-parallel-size 4", script)
+        self.assertIn("--tensor-parallel-size 2", script)
+        self.assertIn("--window-seconds 1", script)
+        self.assertIn("--step-seconds 0.1", script)
+
     def test_only_requires_a_value(self) -> None:
         result = self.run_cli("--only")
 

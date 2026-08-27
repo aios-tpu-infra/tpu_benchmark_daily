@@ -26,6 +26,7 @@ README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
 LEGACY_DECODE_TPOT_FIELD = "decode_legacy_min_tpot_ms"
+CURRENT_DECODE_PARALLELISM = "DP4/TP2/EP8"
 BENCHMARK_CONFIGS = {
     "dp8": {"label": "DP8", "color": "#1570ef"},
     "pcp8": {"label": "PCP8", "color": "#7a5af8"},
@@ -1017,6 +1018,7 @@ def decode_history_chart_data(
         run
         for run in runs
         if run["benchmark_config"] == "dp8"
+        and run.get("decode_parallelism") == CURRENT_DECODE_PARALLELISM
         and run.get("decode_status", "success") == "success"
         and (
             run.get(LEGACY_DECODE_THROUGHPUT_FIELD) is not None
@@ -1035,7 +1037,7 @@ def decode_history_chart_data(
         ),
         (
             "peak-active-p50",
-            "C256 peak-active window P50",
+            "DP4/TP2 C256 peak-active window P50",
             "#039855",
             "decode_window_p50_throughput",
         ),
@@ -1047,7 +1049,7 @@ def decode_history_chart_data(
                 "x_index": index_by_run_id[str(run["run_id"])],
                 "value": run[field],
                 "tooltip": (
-                    f"{run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
+                    f"{CURRENT_DECODE_PARALLELISM} "
                     f"{label} · {run['run_id']}: "
                     f"{run[field]:,.2f} tok/s"
                 ),
@@ -1432,6 +1434,13 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
     for grouped_run in report_table_runs(runs, table_limit):
         dp_run = grouped_run["configs"].get("dp8")
         pcp_run = grouped_run["configs"].get("pcp8")
+        decode_run = (
+            dp_run
+            if dp_run
+            and dp_run.get("decode_parallelism")
+            == CURRENT_DECODE_PARALLELISM
+            else None
+        )
         revision = grouped_run["torchtpu_vllm_revision"]
         revision_display = f"`{revision[:12]}`" if revision != "unknown" else "—"
         dp_prefill = dp_run.get("best_total_token_throughput") if dp_run else None
@@ -1439,32 +1448,42 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             pcp_run.get("best_total_token_throughput") if pcp_run else None
         )
         dp_decode = (
-            dp_run.get("decode_window_p50_throughput") if dp_run else None
+            decode_run.get("decode_window_p50_throughput")
+            if decode_run
+            else None
         )
         dp_tpot_p50 = (
-            dp_run.get("decode_peak_active_tpot_p50_ms") if dp_run else None
+            decode_run.get("decode_peak_active_tpot_p50_ms")
+            if decode_run
+            else None
         )
         legacy_dp_decode = (
-            dp_run.get(LEGACY_DECODE_THROUGHPUT_FIELD) if dp_run else None
+            decode_run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
+            if decode_run
+            else None
         )
         legacy_dp_tpot = (
-            dp_run.get(LEGACY_DECODE_TPOT_FIELD) if dp_run else None
+            decode_run.get(LEGACY_DECODE_TPOT_FIELD)
+            if decode_run
+            else None
         )
-        decode_status = dp_run.get("decode_status") if dp_run else "not-run"
+        decode_status = (
+            decode_run.get("decode_status") if decode_run else "not-run"
+        )
         if decode_status == "failed":
             dp_decode = -1.0
             dp_tpot_p50 = None
             decode_protocol = "failed"
         elif dp_decode is not None:
             decode_protocol = (
-                f"{dp_run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
+                f"{CURRENT_DECODE_PARALLELISM} "
                 "C256 peak-active P50"
             )
         elif legacy_dp_decode is not None:
             dp_decode = legacy_dp_decode
             dp_tpot_p50 = legacy_dp_tpot
             decode_protocol = (
-                f"{dp_run.get('decode_parallelism') or 'DP8/TP1/EP8'} "
+                f"{CURRENT_DECODE_PARALLELISM} "
                 "legacy peak/min"
             )
         else:
@@ -1492,8 +1511,8 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         "Test time (UTC)",
         "DP peak prefill tok/s",
         "PCP peak prefill tok/s",
-        "DP decode tok/s",
-        "DP decode TPOT (ms)",
+        "DP4/TP2 decode tok/s",
+        "DP4/TP2 decode TPOT (ms)",
         "Decode protocol",
         *ttft_headers,
     ]
@@ -1526,9 +1545,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "![Recent DP8 vs PCP8 peak throughput over time]"
             "(reports/throughput_history.svg)",
             "",
-            "Recent decode throughput over time:",
+            "Recent DP4/TP2 decode throughput over time:",
             "",
-            "![Recent decode throughput over time]"
+            "![Recent DP4/TP2 decode throughput over time]"
             "(reports/decode_throughput_history.svg)",
             "",
             *latest_lines,
@@ -1547,9 +1566,9 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "shown as — and failed lengths as failed. The single-request TTFT "
             "chart uses concurrency 1, runs requests serially, and plots median "
             "latency to the first generated token across the completed samples. "
-            "The decode chart keeps "
-            "legacy peak-output and current peak-active P50 statistics in "
-            "separate series; see "
+            "The decode chart and decode table columns show DP4/TP2/EP8 "
+            "measurements only. Historical DP8/TP1 decode records remain in "
+            "the JSON/CSV history for traceability; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
             "[`reports/throughput_history.json`](reports/throughput_history.json) "
             "for the full history.",
@@ -1683,12 +1702,12 @@ def main() -> None:
             )
         atomic_write(history_svg_path, history_svg)
         decode_history_title = (
-            f"Decode throughput over time — last {decode_run_count} runs"
+            "DP4/TP2 decode throughput over time — "
+            f"last {decode_run_count} runs"
         )
         decode_history_description = (
-            "Legacy peak-output throughput and current C256 peak-active "
-            "window P50 throughput are separate series because their "
-            "statistics are not directly comparable."
+            "DP4/TP2/EP8 C256 peak-active window P50 throughput. Historical "
+            "DP8/TP1 decode measurements are excluded from this chart."
         )
         if decode_history_series:
             decode_history_svg = chart_svg(

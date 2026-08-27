@@ -3,8 +3,8 @@
 ## TL;DR
 
 本项目每日顺序执行三组 Qwen3.5-397B-A17B-FP8 真实权重 benchmark：
-TP1/DP8/EP8 C256 decode、DP8 prefill 和 PCP8 prefill。Decode 使用
-C256/P65536/D1024、独立请求前缀、一轮 10 秒滑窗，按实际 peak-active
+DP4/TP2/EP8 C256 decode、DP8 prefill 和 PCP8 prefill。Decode 使用
+C256/P65536/D1024、独立请求前缀、一轮 1 秒滑窗，按实际 peak-active
 plateau 统计。DP8 和 PCP8 prefill 服务还分别测试并发度 1、输入长度
 8K/16K/32K/64K/128K/252K、输出长度 1 的 TTFT；8K/16K/32K 每档串行执行
 16 条 measured requests，64K/128K/252K 每档执行 4 条，并展示 median TTFT。
@@ -34,9 +34,9 @@ Recent DP8 vs PCP8 peak throughput over time:
 
 ![Recent DP8 vs PCP8 peak throughput over time](reports/throughput_history.svg)
 
-Recent DP8 decode throughput over time:
+Recent DP4/TP2 decode throughput over time:
 
-![Recent DP8 decode throughput over time](reports/decode_throughput_history.svg)
+![Recent DP4/TP2 decode throughput over time](reports/decode_throughput_history.svg)
 
 Latest DP8: **72,407.54 total tok/s** at concurrency **32** (`20260901T143805Z`).
 Latest PCP8: **54,356.74 total tok/s** at concurrency **32** (`20260901T143805Z`).
@@ -44,7 +44,7 @@ Latest PCP8: **54,356.74 total tok/s** at concurrency **32** (`20260901T143805Z`
 Latest DP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32K=16, 64K/128K/252K=4** (`20260901T143805Z`).
 Latest PCP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32K=16, 64K/128K/252K=4** (`20260901T143805Z`).
 
-| vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP decode tok/s | DP decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
+| vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP4/TP2 decode tok/s | DP4/TP2 decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | `896a56ad7568` | 2026-09-01 14:38 | 72,407.54 | 54,356.74 | 5,199.20 | 41.52 | C256 peak-active P50 | 1,026.75 | 227.64 | 2,116.01 | 430.26 | 4,505.95 | 842.29 | 10,088.05 | 1,818.13 | 24,512.55 | 4,169.80 | 64,840.60 | 10,149.86 |
 | `0be027b92557` | 2026-08-26 11:33 | 57,682.03 | 54,330.21 | 5,162.40 | 41.76 | C256 peak-active P50 | 1,004.77 | 217.92 | 2,073.45 | 408.26 | 4,402.55 | 802.85 | 9,910.08 | 1,722.84 | 24,144.02 | 3,984.30 | 64,042.64 | 9,806.97 |
@@ -57,7 +57,7 @@ Latest PCP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32
 | `017b87e7fe02` | 2026-08-21 23:22 | — | -1.00 | — | — | — | — | failed | — | failed | — | failed | — | failed | — | failed | — | failed |
 | `77dd6ade7448` | 2026-08-21 14:15 | 57,348.33 | 50,252.38 | 4,864.90 | 42.69 | C256 peak-active P50 | 1,007.81 | 229.05 | 2,086.93 | 426.78 | 4,422.12 | 890.30 | 9,941.75 | 1,940.06 | 24,228.15 | 4,209.24 | 64,279.58 | 10,284.50 |
 
-Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart keeps legacy peak-output and current peak-active P50 statistics in separate series; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
+Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart and decode table columns show DP4/TP2/EP8 measurements only. Historical DP8/TP1 decode records remain in the JSON/CSV history for traceability; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->
 
 ## Real variable-length prefill benchmark
@@ -273,7 +273,7 @@ scripts/daily_benchmark.sh --only pcp-prefill --prefill-mode ttft
 
 `--prefill-mode all` is the default and preserves the existing behavior. The
 mode applies to every selected prefill group, so a full run with
-`--prefill-mode throughput` still runs DP decode but limits both DP8 and PCP8
+`--prefill-mode throughput` still runs DP4/TP2 decode but limits both DP8 and PCP8
 prefill to their throughput sweeps. An explicitly supplied `--prefill-mode` is
 rejected with `--only dp-decode` because that selection contains no prefill
 benchmark.

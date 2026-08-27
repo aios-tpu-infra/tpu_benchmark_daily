@@ -53,7 +53,7 @@ class UpdateReportTest(unittest.TestCase):
 
         block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
         self.assertIn("Latest DP8: **failed (-1.00 total tok/s)**", block)
-        self.assertIn("| -1.00 | — | -1.00 | — | failed |", block)
+        self.assertIn("| -1.00 | — | — | — | — |", block)
 
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
         self.assertEqual(latest["schema_version"], 8)
@@ -114,6 +114,8 @@ class UpdateReportTest(unittest.TestCase):
         self.assertEqual(record["decode_window_p50_throughput"], 3900.0)
         self.assertEqual(record["decode_peak_active_tpot_p50_ms"], 47.0)
         block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
+        self.assertIn("Recent DP4/TP2 decode throughput", block)
+        self.assertIn("DP4/TP2 decode tok/s", block)
         self.assertIn("DP4/TP2/EP8 C256 peak-active P50", block)
 
     def test_schema3_decode_metrics_migrate_without_changing_protocol(self) -> None:
@@ -161,21 +163,31 @@ class UpdateReportTest(unittest.TestCase):
             18.4131,
         )
 
-    def test_decode_history_keeps_legacy_and_peak_active_series_separate(
+    def test_decode_history_only_shows_dp4_tp2_and_keeps_metrics_separate(
         self,
     ) -> None:
         runs = [
             {
-                "run_id": "legacy-run",
+                "run_id": "dp8-legacy-run",
                 "benchmark_config": "dp8",
                 "completed_at": "2026-07-23T18:00:00+00:00",
+                "decode_parallelism": "DP8/TP1/EP8",
                 UPDATE_REPORT.LEGACY_DECODE_THROUGHPUT_FIELD: 632.0,
                 "decode_window_p50_throughput": None,
             },
             {
-                "run_id": "current-run",
+                "run_id": "dp4-legacy-run",
                 "benchmark_config": "dp8",
                 "completed_at": "2026-07-24T18:00:00+00:00",
+                "decode_parallelism": "DP4/TP2/EP8",
+                UPDATE_REPORT.LEGACY_DECODE_THROUGHPUT_FIELD: 700.0,
+                "decode_window_p50_throughput": None,
+            },
+            {
+                "run_id": "dp4-current-run",
+                "benchmark_config": "dp8",
+                "completed_at": "2026-07-25T18:00:00+00:00",
+                "decode_parallelism": "DP4/TP2/EP8",
                 UPDATE_REPORT.LEGACY_DECODE_THROUGHPUT_FIELD: None,
                 "decode_window_p50_throughput": 3968.0,
             },
@@ -190,14 +202,14 @@ class UpdateReportTest(unittest.TestCase):
 
         series, labels = UPDATE_REPORT.decode_history_chart_data(runs)
 
-        self.assertEqual(labels, ["07-23 18:00", "07-24 18:00"])
+        self.assertEqual(labels, ["07-24 18:00", "07-25 18:00"])
         self.assertEqual(
             [item["config"] for item in series],
             ["legacy", "peak-active-p50"],
         )
         self.assertEqual(
             [point["value"] for point in series[0]["points"]],
-            [632.0],
+            [700.0],
         )
         self.assertEqual(
             [point["value"] for point in series[1]["points"]],

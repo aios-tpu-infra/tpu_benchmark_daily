@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure strict full-concurrency decode throughput and TPOT.
+"""Measure peak sustained-concurrency decode throughput and TPOT.
 
 Every request uses a deterministic but distinct natural-language-derived token
 prompt and the same decode length. The workload dimensions are intentionally
@@ -368,7 +368,9 @@ def analyze_round(
     )
     full_token_left = bisect.bisect_left(all_token_times, full_start_s)
     full_token_right = bisect.bisect_left(all_token_times, full_end_s)
-    full_overlap_token_count = full_token_right - full_token_left
+    full_overlap_token_count = (
+        full_token_right - full_token_left if full_duration_s > 0 else 0
+    )
     full_overlap_throughput = (
         full_overlap_token_count / full_duration_s
         if full_duration_s > 0
@@ -381,8 +383,6 @@ def analyze_round(
             "full_overlap_duration_s": full_duration_s,
             "full_overlap_token_count": full_overlap_token_count,
             "full_overlap_throughput_tok_s": full_overlap_throughput,
-            "active_requests_max": concurrency if full_duration_s > 0 else 0,
-            "timeline_valid_full_concurrency_decode": full_duration_s > 0,
             "submit_skew_s": max(starts_s) - min(starts_s),
             "first_token_skew_s": max(firsts_s) - min(firsts_s),
             "ttft_s": metric_stats(
@@ -406,19 +406,21 @@ def analyze_round(
     if full_overlap_token_count < min_full_overlap_tokens:
         summary["invalid_reason"] = "full_overlap_has_too_few_tokens"
         return RoundAnalysis(summary, [], request_tpots)
-    if full_duration_s + 1e-9 < window_s:
-        summary["invalid_reason"] = "full_overlap_shorter_than_window"
+    scan_start_s = min(start_s for start_s, _ in decode_intervals)
+    scan_end_s = max(end_s for _, end_s in decode_intervals)
+    if scan_end_s - scan_start_s + 1e-9 < window_s:
+        summary["invalid_reason"] = "decode_span_shorter_than_window"
         return RoundAnalysis(summary, [], request_tpots)
 
     candidate_windows: list[dict[str, Any]] = []
-    cursor_s = full_start_s
-    while cursor_s + window_s <= full_end_s + 1e-9:
+    cursor_s = scan_start_s
+    while cursor_s + window_s <= scan_end_s + 1e-9:
         end_s = cursor_s + window_s
         active_requests = sum(
             interval_start_s <= cursor_s and interval_end_s >= end_s
             for interval_start_s, interval_end_s in decode_intervals
         )
-        if active_requests != concurrency:
+        if active_requests == 0:
             cursor_s += step_s
             continue
         token_left = bisect.bisect_left(all_token_times, cursor_s)
@@ -437,30 +439,58 @@ def analyze_round(
         )
         cursor_s += step_s
 
-    windows = candidate_windows
+    active_requests_max = max(
+        (int(window["active_requests"]) for window in candidate_windows),
+        default=0,
+    )
+    windows = [
+        window
+        for window in candidate_windows
+        if window["active_requests"] == active_requests_max
+    ]
     for index, window in enumerate(windows, start=1):
         window["window"] = index
     throughputs = [float(window["throughput_tok_s"]) for window in windows]
     if windows:
-        peak_start_s = full_start_s
-        peak_end_s = (
-            float(windows[-1]["end_after_batch_start_s"]) + batch_start_s
-        )
+        peak_intervals: list[tuple[float, float]] = []
+        for window in windows:
+            interval_start_s = (
+                float(window["start_after_batch_start_s"]) + batch_start_s
+            )
+            interval_end_s = (
+                float(window["end_after_batch_start_s"]) + batch_start_s
+            )
+            if peak_intervals and interval_start_s <= peak_intervals[-1][1]:
+                previous_start_s, previous_end_s = peak_intervals[-1]
+                peak_intervals[-1] = (
+                    previous_start_s,
+                    max(previous_end_s, interval_end_s),
+                )
+            else:
+                peak_intervals.append((interval_start_s, interval_end_s))
         peak_active_itls_ms = [
             (current_s - previous_s) * 1000
             for result in results
             for previous_s, current_s in zip(
                 result.token_times_s, result.token_times_s[1:]
             )
-            if peak_start_s <= current_s < peak_end_s
+            if any(
+                interval_start_s <= current_s < interval_end_s
+                for interval_start_s, interval_end_s in peak_intervals
+            )
         ]
     else:
         peak_active_itls_ms = []
     summary.update(
         {
-            "active_requests_max": concurrency if windows else 0,
-            "timeline_valid_full_concurrency_decode": bool(windows),
-            "full_concurrency_window_count": len(windows),
+            "active_requests_max": active_requests_max,
+            "timeline_valid_full_concurrency_decode": (
+                active_requests_max == concurrency
+            ),
+            "full_concurrency_window_count": sum(
+                window["active_requests"] == concurrency
+                for window in candidate_windows
+            ),
             "window_count": len(windows),
             "window_throughput_tok_s": metric_stats(throughputs),
             "peak_active_tpot_ms": metric_stats(peak_active_itls_ms),
@@ -676,13 +706,15 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Tokenizer：`{benchmark['tokenizer_dir']}`",
         f"- 滑动窗口：`{benchmark['window_s']}` 秒，步长 `{benchmark['step_s']}` 秒",
         (
-            "- 窗口选择：从严格满并发起点对齐，只保留完整覆盖窗口期间"
-            f"始终有 `{benchmark['concurrency']}` 条活跃 decode 请求的窗口。"
+            "- 窗口选择：扫描完整 decode 时间线，计算每个窗口全程持续活跃的"
+            "请求数，并只保留实际最高 sustained concurrency 对应的窗口；"
+            f"不要求达到提交并发 `{benchmark['concurrency']}`。"
         ),
         (
-            "- 有效性门槛：严格满并发至少持续 "
+            "- 可选满并发诊断门槛：所有已提交请求同时 decode 至少持续 "
             f"`{benchmark['min_full_overlap_s']}` 秒，且至少产生 "
-            f"`{benchmark['min_full_overlap_tokens']}` 个 token。"
+            f"`{benchmark['min_full_overlap_tokens']}` 个 token；默认均为 0，"
+            "因此不会限制实际最高并发窗口。"
         ),
         (
             "- 主 TPOT：与 tpu-misc 相同，统计 peak-active 窗口覆盖范围内"
@@ -789,7 +821,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run distinct concurrent prefill/decode requests and measure "
-            "strict full-concurrency decode intervals with sliding windows."
+            "peak sustained-concurrency decode intervals with sliding windows."
         )
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:18100")
@@ -931,7 +963,7 @@ def main() -> None:
         default=None,
     )
     summary = {
-        "schema_version": 5,
+        "schema_version": 6,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
             "benchmark_config": (
@@ -954,7 +986,7 @@ def main() -> None:
             "step_s": args.step_seconds,
             "min_full_overlap_s": args.min_full_overlap_seconds,
             "min_full_overlap_tokens": args.min_full_overlap_tokens,
-            "boundary": "strict_full_concurrency_aligned_sliding_windows",
+            "boundary": "peak_sustained_concurrency_sliding_windows",
             "token_accounting": "continuous_usage_completion_tokens",
         },
         "best": (
@@ -1065,7 +1097,7 @@ def main() -> None:
             "[done] "
             f"throughput_p50={throughput_p50:.3f} tok/s "
             f"full_overlap_throughput_p50="
-            f"{full_overlap_throughput:.3f} tok/s "
+            f"{format_metric(full_overlap_throughput)} tok/s "
             f"peak_active_tpot_p50_avg={peak_tpot_avg:.3f} ms "
             f"output={args.output_dir}",
             flush=True,

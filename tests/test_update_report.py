@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -14,6 +15,59 @@ SPEC.loader.exec_module(UPDATE_REPORT)
 
 
 class UpdateReportTest(unittest.TestCase):
+    def test_summary_mtime_wins_over_timezone_less_detail_date(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            project_root = Path(temporary_directory)
+            run_dir = project_root / "runs" / "20260727T043341Z"
+            result_dir = run_dir / "results" / "dp8"
+            result_dir.mkdir(parents=True)
+            detail_path = result_dir / "best.json"
+            detail_path.write_text(
+                json.dumps({"date": "20990101-000000"}), encoding="utf-8"
+            )
+            result = {
+                "concurrency": 8,
+                "total_token_throughput": 1234.0,
+                "request_throughput": 1.0,
+                "mean_ttft_ms": 100.0,
+                "p99_ttft_ms": 110.0,
+                "completed": 1,
+                "failed": 0,
+                "file": detail_path.name,
+            }
+            summary_path = result_dir / "summary.json"
+            summary_path.write_text(
+                json.dumps(
+                    {
+                        "benchmark": {
+                            "benchmark_config": "dp8",
+                            "input_length": 8192,
+                            "output_length": 1,
+                            "model": "fixture",
+                        },
+                        "best": result,
+                        "results": [result],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            summary_mtime = 1_700_000_000
+            os.utime(summary_path, (summary_mtime, summary_mtime))
+
+            record = UPDATE_REPORT.build_record(
+                project_root=project_root,
+                run_dir=run_dir,
+                summary_path=summary_path,
+                input_length=8192,
+                output_length=1,
+                model="fixture",
+                benchmark_config="dp8",
+                status="success",
+                decode_status="not-run",
+            )
+
+        self.assertEqual(record["completed_at"], "2023-11-14T22:13:20+00:00")
+
     def test_failed_attempt_records_minus_one_without_a_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             project_root = Path(temporary_directory)

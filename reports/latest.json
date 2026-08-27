@@ -2,7 +2,7 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-08-27T22:11:25+00:00",
+      "completed_at": "2026-08-27T14:15:49+00:00",
       "concurrency": 32,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
@@ -89,7 +89,7 @@
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-08-27T22:49:21+00:00",
+      "completed_at": "2026-08-27T14:55:50+00:00",
       "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
@@ -176,7 +176,7 @@
     }
   },
   "decode": {
-    "completed_at": "2026-08-27T22:11:25+00:00",
+    "completed_at": "2026-08-27T14:15:49+00:00",
     "decode_parallelism": "DP4/TP2/EP8",
     "decode_peak_active_tpot_p50_ms": 40.91988899745047,
     "decode_window_p50_throughput": 6220.0,
@@ -191,7 +191,7 @@
   "prefill_benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-08-27T22:11:25+00:00",
+      "completed_at": "2026-08-27T14:15:49+00:00",
       "concurrency": 32,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
@@ -278,7 +278,7 @@
     },
     "pcp8": {
       "benchmark_config": "pcp8",
-      "completed_at": "2026-08-27T22:49:21+00:00",
+      "completed_at": "2026-08-27T14:55:50+00:00",
       "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
@@ -365,5 +365,5 @@
     }
   },
   "schema_version": 9,
-  "updated_at": "2026-08-27T22:49:21+00:00"
+  "updated_at": "2026-08-27T14:55:50+00:00"
 }

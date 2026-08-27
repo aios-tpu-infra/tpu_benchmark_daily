@@ -7860,7 +7860,7 @@
       "best_concurrency": 32,
       "best_request_throughput": 9.020516945562502,
       "best_total_token_throughput": 73905.09533499359,
-      "completed_at": "2026-08-27T22:11:25+00:00",
+      "completed_at": "2026-08-27T14:15:49+00:00",
       "concurrency_results": [
         {
           "concurrency": 8,
@@ -7994,7 +7994,7 @@
       "best_concurrency": 16,
       "best_request_throughput": 8.164643482855809,
       "best_total_token_throughput": 66892.92405503764,
-      "completed_at": "2026-08-27T22:49:21+00:00",
+      "completed_at": "2026-08-27T14:55:50+00:00",
       "concurrency_results": [
         {
           "concurrency": 8,
@@ -8125,5 +8125,5 @@
     }
   ],
   "schema_version": 9,
-  "updated_at": "2026-08-27T22:49:21+00:00"
+  "updated_at": "2026-08-27T14:55:50+00:00"
 }

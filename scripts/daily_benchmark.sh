@@ -22,7 +22,7 @@ SERVER_STOP_TIMEOUT="${SERVER_STOP_TIMEOUT:-120}"
 KEEP_SERVER_RUNNING="${KEEP_SERVER_RUNNING:-0}"
 PUBLISH_REPORTS="${PUBLISH_REPORTS:-1}"
 MACHINE_IP="${MACHINE_IP:-}"
-DP_DECODE_SERVICE_ID=tpu-daily-dp8-decode-c256
+DP_DECODE_SERVICE_ID=tpu-daily-dp4-tp2-decode-c256
 DP_PREFILL_SERVICE_ID=tpu-daily-dp8-prefill
 PCP_PREFILL_SERVICE_ID=tpu-daily-pcp8-prefill
 PREPARE_ONLY=0
@@ -101,7 +101,7 @@ Usage: scripts/daily_benchmark.sh [--prepare-only] [--test-only]
 The default full workflow stops an existing vLLM service on PORT, updates
 to the requested vllm-torchtpu commit (or latest main by default), installs its
 compatible torch_tpu version with pip, updates
-.venv, then runs real-weight C256 DP8 decode, DP8 prefill, and PCP8 prefill
+.venv, then runs real-weight C256 DP4/TP2 decode, DP8 prefill, and PCP8 prefill
 services. Benchmark groups are independent: a failed group is recorded before
 the runner advances. Reports are generated and published after all selected
 groups finish. DP8/PCP8 prefill selections run both the throughput and 8K–252K
@@ -194,11 +194,11 @@ case "$BENCHMARK_SELECTION" in
     RUN_DP_DECODE=1
     RUN_DP_PREFILL=1
     RUN_PCP_PREFILL=1
-    BENCHMARK_CONFIGS_JSON='["dp8_decode_c256", "dp8", "pcp8"]'
+    BENCHMARK_CONFIGS_JSON='["dp4_tp2_decode_c256", "dp8", "pcp8"]'
     ;;
   dp-decode)
     RUN_DP_DECODE=1
-    BENCHMARK_CONFIGS_JSON='["dp8_decode_c256"]'
+    BENCHMARK_CONFIGS_JSON='["dp4_tp2_decode_c256"]'
     ;;
   dp-prefill)
     RUN_DP_PREFILL=1
@@ -286,7 +286,7 @@ if (( TEST_ONLY && PREPARE_ONLY )); then
   echo "ERROR: --test-only and --prepare-only cannot be used together." >&2
   exit 2
 fi
-if (( TEST_ONLY )) && [[ -n "$TORCHTPU_COMMIT" ]]; then
+if (( TEST_ONLY && TORCHTPU_COMMIT_SPECIFIED )); then
   echo "ERROR: --commit cannot be used with --test-only because test-only does not update source." >&2
   exit 2
 fi
@@ -372,7 +372,7 @@ echo "Prefill workload: $PREFILL_WORKLOAD"
 echo "vLLM service launcher: $VLLM_SERVICE_LAUNCH"
 echo "vLLM service state: $VLLM_SERVICE_STATE_ROOT"
 echo "vLLM metrics targets: $VLLM_SERVICE_TARGET_ROOT"
-if [[ -n "$TORCHTPU_COMMIT" ]]; then
+if (( TORCHTPU_COMMIT_SPECIFIED )); then
   echo "Requested vllm-torchtpu commit: $TORCHTPU_COMMIT"
 else
   echo "Requested vllm-torchtpu source: latest origin/main"
@@ -578,6 +578,7 @@ cat > "$RUN_DIR/run_metadata.json" <<EOF
   "model_load_format": "auto",
   "decode_model_directory": "$MODEL_DIR",
   "decode_model_load_format": "auto",
+  "decode_parallelism": "DP4/TP2/EP8",
   "decode_workload": "C256/P65536/D1024",
   "benchmark_configs": $BENCHMARK_CONFIGS_JSON,
   "port": $PORT
@@ -709,13 +710,14 @@ run_decode_smoke() {
   local result_dir=$1
   local smoke_dir="$result_dir/smoke"
 
-  echo "Running real-weight DP8 C8 decode smoke..."
+  echo "Running real-weight DP4/TP2 C8 decode smoke..."
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
     --base-url "http://127.0.0.1:$PORT" \
     --model Qwen3.5-397B-A17B-FP8 \
     --output-dir "$smoke_dir" \
     --concurrency 8 \
-    --data-parallel-size 8 \
+    --data-parallel-size 4 \
+    --tensor-parallel-size 2 \
     --prefill-tokens 65536 \
     --decode-tokens 32 \
     --tokenizer-dir "$MODEL_DIR" \
@@ -723,7 +725,7 @@ run_decode_smoke() {
     --window-seconds 0.1 \
     --step-seconds 0.05 \
     --cache-salt-prefix "tpu-daily-${timestamp}-smoke" \
-    2>&1 | tee "$RUN_DIR/dp8_decode_c256_smoke.log"
+    2>&1 | tee "$RUN_DIR/dp4_tp2_decode_c256_smoke.log"
 }
 
 run_decode_round() {
@@ -731,25 +733,26 @@ run_decode_round() {
   local run_index=$2
   local run_dir="$result_dir/run_${run_index}"
 
-  echo "Running real-weight DP8 C256 decode round $run_index/1..."
+  echo "Running real-weight DP4/TP2 C256 decode round $run_index/1..."
   "$VENV_DIR/bin/python" "$SCRIPT_DIR/bench_decode_sliding_window.py" \
     --base-url "http://127.0.0.1:$PORT" \
     --model Qwen3.5-397B-A17B-FP8 \
     --output-dir "$run_dir" \
     --concurrency 256 \
-    --data-parallel-size 8 \
+    --data-parallel-size 4 \
+    --tensor-parallel-size 2 \
     --prefill-tokens 65536 \
     --decode-tokens 1024 \
     --tokenizer-dir "$MODEL_DIR" \
     --rounds 1 \
-    --window-seconds 10 \
-    --step-seconds 1 \
+    --window-seconds 1 \
+    --step-seconds 0.1 \
     --cache-salt-prefix "tpu-daily-${timestamp}-run${run_index}" \
-    2>&1 | tee "$RUN_DIR/dp8_decode_c256_run_${run_index}.log"
+    2>&1 | tee "$RUN_DIR/dp4_tp2_decode_c256_run_${run_index}.log"
 }
 
 run_decode_benchmark() {
-  local result_dir="$RUN_DIR/results/dp8_decode_c256"
+  local result_dir="$RUN_DIR/results/dp4_tp2_decode_c256"
 
   mkdir -p "$result_dir"
   if ! run_decode_smoke "$result_dir"; then
@@ -768,7 +771,7 @@ run_decode_benchmark() {
       "http://127.0.0.1:$PORT/health" >/dev/null; then
     return 1
   fi
-  echo "DP8 C256 decode benchmark completed successfully."
+  echo "DP4/TP2 C256 decode benchmark completed successfully."
 }
 
 run_prefill_benchmark() {
@@ -883,6 +886,7 @@ record_dp_report() {
     --benchmark-config dp8
     --status "$DP_PREFILL_STATUS"
     --decode-status "$DP_DECODE_STATUS"
+    --decode-parallelism DP4/TP2/EP8
     --input-length 8192
     --output-length 1
     --model Qwen3.5-397B-A17B-FP8
@@ -893,7 +897,7 @@ record_dp_report() {
   fi
   if [[ "$DP_DECODE_STATUS" == success ]]; then
     report_args+=(
-      --decode-summary "$RUN_DIR/results/dp8_decode_c256/aggregate.json"
+      --decode-summary "$RUN_DIR/results/dp4_tp2_decode_c256/aggregate.json"
     )
   fi
   report_args+=(--ttft-status "$DP_PREFILL_TTFT_STATUS")
@@ -956,7 +960,7 @@ trap on_signal INT TERM
 
 if (( RUN_DP_DECODE )); then
   if start_server \
-      dp8_decode_c256 \
+      dp4_tp2_decode_c256 \
       "$SCRIPT_DIR/start_dp_decode_server.sh" \
       "$MODEL_DIR" \
       "$DP_DECODE_SERVICE_ID"; then
@@ -964,11 +968,11 @@ if (( RUN_DP_DECODE )); then
       DP_DECODE_STATUS=success
     else
       DP_DECODE_STATUS=failed
-      echo "ERROR: DP8 C256 decode benchmark failed; recording -1 tok/s." >&2
+      echo "ERROR: DP4/TP2 C256 decode benchmark failed; recording -1 tok/s." >&2
     fi
   else
     DP_DECODE_STATUS=failed
-    echo "ERROR: DP8 C256 decode server failed; recording -1 tok/s." >&2
+    echo "ERROR: DP4/TP2 C256 decode server failed; recording -1 tok/s." >&2
   fi
   if [[ "$DP_DECODE_STATUS" == failed ]] ||
       (( RUN_DP_PREFILL || RUN_PCP_PREFILL )); then

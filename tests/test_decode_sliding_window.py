@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,23 @@ def request_result(
 
 
 class DecodeSlidingWindowTest(unittest.TestCase):
+    def test_cli_defaults_to_dp4_tp2(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "bench_decode_sliding_window.py",
+                "--output-dir",
+                "output",
+                "--tokenizer-dir",
+                "model",
+            ],
+        ):
+            args = BENCHMARK.parse_args()
+
+        self.assertEqual(args.data_parallel_size, 4)
+        self.assertEqual(args.tensor_parallel_size, 2)
+
     def analyze(
         self, results: list[object], window_s: float = 8.0
     ) -> object:

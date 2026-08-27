@@ -204,7 +204,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 self.assertLessEqual(len(script.splitlines()), 8)
                 self.assertNotIn("vllm-service-launch", script)
 
-    def test_all_server_configs_use_auto_sized_unified_pool(self) -> None:
+    def test_all_server_configs_use_unified_pool(self) -> None:
         for script_name in (
             "start_dp_decode_server.sh",
             "start_prefill_server.sh",
@@ -217,7 +217,14 @@ class TestOnlyScriptsTest(unittest.TestCase):
                     "export TPU_VLLM_ENABLE_UNIFIED_BLOCK_POOL=1",
                     script,
                 )
-                self.assertNotIn("--block-size", script)
+        decode_script = (
+            PROJECT_ROOT / "scripts" / "start_dp_decode_server.sh"
+        ).read_text(encoding="utf-8")
+        prefill_script = (
+            PROJECT_ROOT / "scripts" / "start_prefill_server.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('--block-size "$BLOCK_SIZE"', decode_script)
+        self.assertNotIn("--block-size", prefill_script)
 
     def test_all_server_configs_enable_parallel_precompile(self) -> None:
         for script_name in (
@@ -294,7 +301,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
                 )
                 self.assertIn("export TPU_PREMAPPED_BUFFER_SIZE", script)
 
-    def test_decode_server_uses_4096_token_chunk_and_compile_bucket(self) -> None:
+    def test_decode_server_uses_validated_dp4_tp2_configuration(self) -> None:
         script = (
             PROJECT_ROOT / "scripts" / "start_dp_decode_server.sh"
         ).read_text(encoding="utf-8")
@@ -304,11 +311,18 @@ class TestOnlyScriptsTest(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,4096}"',
+            'COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,64,72,4096}"',
             script,
         )
-        self.assertNotIn("4352", script)
-        self.assertNotIn("4384", script)
+        self.assertIn('BLOCK_SIZE="${BLOCK_SIZE:-2304}"', script)
+        self.assertIn('GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"', script)
+        self.assertIn("--tensor-parallel-size 2", script)
+        self.assertIn("--data-parallel-size 4", script)
+        self.assertIn("--data-parallel-size-local 4", script)
+        self.assertIn('--mamba-ssm-cache-dtype "$MAMBA_SSM_CACHE_DTYPE"', script)
+        self.assertIn("export USE_BATCHED_RPA_SEQ_ON_LANE=1", script)
+        self.assertIn("export TPU_MOE_OWNER_OUTPUT_MODE", script)
+        self.assertIn("--no-enable-prefix-caching", script)
 
     def test_throughput_test_only_accepts_flag_before_run_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

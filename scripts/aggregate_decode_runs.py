@@ -12,6 +12,8 @@ from typing import Any
 
 EXPECTED_BENCHMARK = {
     "concurrency": 256,
+    "data_parallel_size": 4,
+    "tensor_parallel_size": 2,
     "prefill_tokens": 65536,
     "decode_tokens": 1024,
 }
@@ -214,8 +216,8 @@ def aggregate_result_root(result_root: Path, runs: int) -> dict[str, Any]:
         "schema_version": 1,
         "result_root": str(result_root),
         "protocol": (
-            f"C256/P65536/D1024; {client_processes}; "
-            "distinct prompt and cache_salt per request; request_id % 8 "
+            f"DP4/TP2 C256/P65536/D1024; {client_processes}; "
+            "distinct prompt and cache_salt per request; request_id % 4 "
             "DP-rank routing; no admission barrier"
         ),
         "statistics": {

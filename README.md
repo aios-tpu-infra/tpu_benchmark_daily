@@ -91,10 +91,10 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
   refreshed from `origin/main` (the local path is retained for compatibility).
 - `models/`: offline model metadata and locally provisioned checkpoint weights;
   checkpoint files are excluded from Git.
-- `scripts/start_dp_decode_server.sh`: starts the real-weight TP1/DP8/EP8
-  C256 decode service with unified pool, auto-derived block size, GMU
-  0.932285943, async scheduling, GDN v3, prefix cache disabled, and the same
-  compile shapes as the current standalone C256 test；服务由
+- `scripts/start_dp_decode_server.sh`: starts the real-weight TP2/DP4/EP8
+  C256 decode service with unified pool, block size 2304, GMU 0.95, BF16 SSM,
+  long-context seq-on-lane RPA, owner-output MoE, prefix cache disabled, and the
+  same compile shapes as the validated standalone C256 test；服务由
   `vllm-service-launch` 以 `role=decode` 托管。
 - `scripts/start_prefill_server.sh`: shared real-weight prefill server launcher;
   `--config dp8` selects DP8/PCP1 and `--config pcp8` selects DP1/PCP8. Both
@@ -357,11 +357,11 @@ daily benchmark 服务。若其他进程占用 `PORT`（默认 18100），工作
 终止该进程，而是让 launcher 安全地返回启动失败。`--prepare-only` 不会修改
 任何运行中的服务。
 
-The runner first starts the real-weight DP8 C256 decode service, runs one
-C8/P65536/D32 smoke process followed by three independent
-C256/P65536/D1024 processes, and stops it. It then starts the real-weight DP8
+The runner first starts the real-weight DP4/TP2 C256 decode service, runs one
+C8/P65536/D32 smoke process followed by one C256/P65536/D1024 process, and
+stops it. It then starts the real-weight DP8
 and PCP8 services one at a time for their prefill suites. The complete run
-therefore contains three benchmark groups: DP8 C256 decode, DP8 prefill, and
+therefore contains three benchmark groups: DP4/TP2 C256 decode, DP8 prefill, and
 PCP8 prefill. Each group is isolated so a startup or benchmark failure is
 recorded before the runner advances to the next group. The two prefill services
 run their existing 8K concurrency sweep first and their single-request TTFT
@@ -381,12 +381,12 @@ automatic load format.
 
 Decode 每条请求使用不同但可重复生成的自然语言前缀和独立 `cache_salt`，因此
 不依赖 prefix cache 的跨请求复用；client 通过 `X-data-parallel-rank` 将
-256 条请求按 `request_id % 8` 精确均分为每个 DP rank 32 条。请求直接并发
+256 条请求按 `request_id % 4` 精确均分为每个 DP rank 64 条。请求直接并发
 提交，不使用服务端 admission barrier。客户端通过 `requests.post(json=...)`
 发起 streaming 请求，并从 cumulative `usage.completion_tokens` 展开 token
 时间线。
 
-若 256 条请求没有形成完整 10 秒重叠区间，各轮
+脚本以 1 秒窗口、0.1 秒步长扫描完整 decode 时间线，各轮
 `run_<N>/summary.json` 中的 `active_requests_max` 和
 `timeline_valid_full_concurrency_decode` 会记录实际峰值并发，主吞吐取该峰值
 并发平台窗口的 P50；主 TPOT 统计相同 peak-active 时间范围内的 token 间隔，
@@ -400,7 +400,7 @@ decode 目录保存 smoke、正式测试 summary 及 aggregate：
 
 ```text
 runs/<UTC timestamp>/results/
-├── dp8_decode_c256/
+├── dp4_tp2_decode_c256/
 │   ├── smoke/
 │   │   └── summary.json
 │   ├── run_1/
@@ -425,7 +425,7 @@ runs/<UTC timestamp>/results/
 ```
 
 Decode、DP8 prefill 和 PCP8 prefill 的原始摘要相互独立；报告生成器显式读取
-`dp8_decode_c256/aggregate.json`，不会再把 decode 原始结果嵌套进
+`dp4_tp2_decode_c256/aggregate.json`，不会再把 decode 原始结果嵌套进
 `dp8/summary.json`。
 
 The three benchmark groups share one run ID and one workflow start timestamp.

@@ -203,11 +203,12 @@ report_args=(
   --output-length "$OUTPUT_LEN"
   --model "$SERVED_MODEL_NAME"
 )
-decode_summary="$RUN_DIR/results/dp8_decode_c256/aggregate.json"
+decode_summary="$RUN_DIR/results/dp4_tp2_decode_c256/aggregate.json"
 if [[ "$BENCHMARK_CONFIG" == "dp8" && -f "$decode_summary" ]]; then
   report_args+=(
     --decode-summary "$decode_summary"
     --decode-status success
+    --decode-parallelism DP4/TP2/EP8
   )
 fi
 

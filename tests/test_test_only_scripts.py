@@ -82,13 +82,68 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("compile sizes:           512,1024,2048,4096", dp.stdout)
         self.assertIn("skip padded MoE tokens:  1", dp.stdout)
         self.assertIn("MoE collection chunk size: 16384", dp.stdout)
+        self.assertIn("fused EP MoE kernel:      1", dp.stdout)
+        self.assertIn("fused EP minimum tokens:  1024", dp.stdout)
+        self.assertIn("sharded routing plan:     1", dp.stdout)
+        self.assertIn("split activation gather:  1", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           64", pcp.stdout)
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("skip padded MoE tokens:  0", pcp.stdout)
         self.assertIn("MoE collection chunk size: 16384", pcp.stdout)
+        self.assertIn("fused EP MoE kernel:      1", pcp.stdout)
+        self.assertIn("fused EP minimum tokens:  1024", pcp.stdout)
+        self.assertIn("sharded routing plan:     1", pcp.stdout)
+        self.assertIn("split activation gather:  1", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
+
+    def test_prefill_server_supports_fused_ep_moe_overrides(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={
+                "USE_MOE_FUSED_EP_KERNEL": "false",
+                "MOE_FUSED_EP_KERNEL_MIN_TOKENS": "2048",
+                "MOE_FUSED_EP_V2_SHARDED_PLAN": "false",
+                "MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER": "false",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("fused EP MoE kernel:      0", result.stdout)
+        self.assertIn("fused EP minimum tokens:  2048", result.stdout)
+        self.assertIn("sharded routing plan:     0", result.stdout)
+        self.assertIn("split activation gather:  0", result.stdout)
+
+    def test_prefill_server_validates_fused_ep_moe_settings(self) -> None:
+        invalid_settings = (
+            ("USE_MOE_FUSED_EP_KERNEL", "invalid", "must be a boolean"),
+            (
+                "MOE_FUSED_EP_KERNEL_MIN_TOKENS",
+                "invalid",
+                "must be a non-negative integer",
+            ),
+            ("MOE_FUSED_EP_V2_SHARDED_PLAN", "invalid", "must be a boolean"),
+            (
+                "MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER",
+                "invalid",
+                "must be a boolean",
+            ),
+        )
+        for name, value, message in invalid_settings:
+            with self.subTest(name=name):
+                result = self.run_script(
+                    "start_prefill_server.sh",
+                    "--config",
+                    "dp8",
+                    "--test-only",
+                    environment={name: value},
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(f"{name} {message}", result.stderr)
 
     def test_prefill_server_supports_moe_chunk_size_override(self) -> None:
         result = self.run_script(

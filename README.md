@@ -38,7 +38,7 @@ Recent DP4/TP2 decode throughput over time:
 
 ![Recent DP4/TP2 decode throughput over time](reports/decode_throughput_history.svg)
 
-Latest DP8: **57,682.03 total tok/s** at concurrency **64** (`20260826T113318Z`).
+Latest DP8: **not run** (`20260827T112905Z`).
 Latest PCP8: **54,330.21 total tok/s** at concurrency **16** (`20260826T113318Z`).
 
 Latest DP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32K=16, 64K/128K/252K=4** (`20260826T113318Z`).
@@ -46,6 +46,7 @@ Latest PCP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP4/TP2 decode tok/s | DP4/TP2 decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `ed5d52b7cb6d` | 2026-08-27 11:29 | — | — | -1.00 | — | failed | — | — | — | — | — | — | — | — | — | — | — | — |
 | `0be027b92557` | 2026-08-26 11:33 | 57,682.03 | 54,330.21 | — | — | — | 1,004.77 | 217.92 | 2,073.45 | 408.26 | 4,402.55 | 802.85 | 9,910.08 | 1,722.84 | 24,144.02 | 3,984.30 | 64,042.64 | 9,806.97 |
 | `ec384c75cfe5` | 2026-08-22 04:25 | — | 54,339.94 | — | — | — | — | 215.91 | — | 411.15 | — | 796.34 | — | 1,732.30 | — | 3,980.49 | — | 9,794.71 |
 | `26a36b23a12d` | 2026-08-22 04:21 | — | -1.00 | — | — | — | — | failed | — | failed | — | failed | — | failed | — | failed | — | failed |
@@ -55,7 +56,6 @@ Latest PCP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32
 | `99a73108f7a9` | 2026-08-21 23:33 | — | 52,062.06 | — | — | — | — | 220.87 | — | 406.67 | — | 822.04 | — | 1,775.28 | — | 4,068.46 | — | 9,987.12 |
 | `017b87e7fe02` | 2026-08-21 23:22 | — | -1.00 | — | — | — | — | failed | — | failed | — | failed | — | failed | — | failed | — | failed |
 | `77dd6ade7448` | 2026-08-21 14:15 | 57,348.33 | 50,252.38 | — | — | — | 1,007.81 | 229.05 | 2,086.93 | 426.78 | 4,422.12 | 890.30 | 9,941.75 | 1,940.06 | 24,228.15 | 4,209.24 | 64,279.58 | 10,284.50 |
-| `77dd6ade7448` | 2026-08-21 14:14 | -1.00 | -1.00 | — | — | — | failed | failed | failed | failed | failed | failed | failed | failed | failed | failed | failed | failed |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart and decode table columns show DP4/TP2/EP8 measurements only. Historical DP8/TP1 decode records remain in the JSON/CSV history for traceability; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

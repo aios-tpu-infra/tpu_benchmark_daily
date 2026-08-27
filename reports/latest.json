@@ -2,89 +2,29 @@
   "benchmarks": {
     "dp8": {
       "benchmark_config": "dp8",
-      "completed_at": "2026-08-26T20:11:13+00:00",
-      "concurrency": 64,
+      "completed_at": "2026-08-27T11:30:33+00:00",
+      "concurrency": null,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
-      "decode_peak_active_tpot_p50_ms": 41.75532888621092,
-      "decode_status": "success",
-      "decode_window_p50_throughput": 5162.4,
+      "decode_parallelism": "DP4/TP2/EP8",
+      "decode_peak_active_tpot_p50_ms": null,
+      "decode_status": "failed",
+      "decode_window_p50_throughput": -1.0,
       "input_length": 8192,
-      "machine_ip": "10.42.24.18",
-      "mean_ttft_ms": 8485.705227562448,
+      "machine_ip": "10.42.24.15",
+      "mean_ttft_ms": null,
       "model": "Qwen3.5-397B-A17B-FP8",
       "output_length": 1,
-      "p99_ttft_ms": 11154.78140459396,
-      "prefill_ttft_status": "success",
-      "request_throughput": 7.040404007275772,
-      "run_id": "20260826T113318Z",
-      "single_request_ttft_results": [
-        {
-          "completed": 16,
-          "error": "",
-          "failed": 0,
-          "input_length": 8192,
-          "label": "8K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 1004.7671304782853
-        },
-        {
-          "completed": 16,
-          "error": "",
-          "failed": 0,
-          "input_length": 16384,
-          "label": "16K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 2073.4495039796457
-        },
-        {
-          "completed": 16,
-          "error": "",
-          "failed": 0,
-          "input_length": 32768,
-          "label": "32K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 4402.54907857161
-        },
-        {
-          "completed": 4,
-          "error": "",
-          "failed": 0,
-          "input_length": 65536,
-          "label": "64K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 9910.082806600258
-        },
-        {
-          "completed": 4,
-          "error": "",
-          "failed": 0,
-          "input_length": 131072,
-          "label": "128K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 24144.01543897111
-        },
-        {
-          "completed": 4,
-          "error": "",
-          "failed": 0,
-          "input_length": 258048,
-          "label": "252K",
-          "output_length": 1,
-          "status": "success",
-          "ttft_ms": 64042.63737704605
-        }
-      ],
-      "status": "success",
+      "p99_ttft_ms": null,
+      "prefill_ttft_status": "not-run",
+      "request_throughput": null,
+      "run_id": "20260827T112905Z",
+      "single_request_ttft_results": [],
+      "status": "not-run",
       "torch_tpu_revision": "",
       "torch_tpu_version": "0.1.1.dev20260813160135",
-      "torchtpu_vllm_revision": "0be027b92557f5d4992a714954503249fa0c5739",
-      "total_token_throughput": 57682.0300316104
+      "torchtpu_vllm_revision": "ed5d52b7cb6d9bbeaa50f7bfd8084903e29ddd6c",
+      "total_token_throughput": null
     },
     "pcp8": {
       "benchmark_config": "pcp8",
@@ -92,6 +32,7 @@
       "concurrency": 16,
       "decode_legacy_min_tpot_ms": null,
       "decode_legacy_peak_output_throughput": null,
+      "decode_parallelism": null,
       "decode_peak_active_tpot_p50_ms": null,
       "decode_status": "not-run",
       "decode_window_p50_throughput": null,
@@ -173,6 +114,6 @@
       "total_token_throughput": 54330.213799294004
     }
   },
-  "schema_version": 7,
-  "updated_at": "2026-08-26T20:54:37+00:00"
+  "schema_version": 8,
+  "updated_at": "2026-08-27T11:30:33+00:00"
 }

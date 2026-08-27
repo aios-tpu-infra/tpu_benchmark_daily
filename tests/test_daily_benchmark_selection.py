@@ -54,6 +54,8 @@ class DailyBenchmarkSelectionTest(unittest.TestCase):
         self.assertIn("--tensor-parallel-size 2", script)
         self.assertIn("--window-seconds 1", script)
         self.assertIn("--step-seconds 0.1", script)
+        self.assertIn("SHARED_MODEL_DIR=", script)
+        self.assertIn("model.safetensors.index.json", script)
 
     def test_only_requires_a_value(self) -> None:
         result = self.run_cli("--only")

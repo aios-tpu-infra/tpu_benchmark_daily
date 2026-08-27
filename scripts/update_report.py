@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
@@ -604,7 +604,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -949,6 +949,24 @@ def latest_runs_by_config(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any
     return latest
 
 
+def latest_prefill_runs_by_config(
+    runs: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    latest: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if run.get("status", "success") != "not-run":
+            latest[run["benchmark_config"]] = run
+    return latest
+
+
+def latest_decode_run(runs: list[dict[str, Any]]) -> dict[str, Any] | None:
+    latest = None
+    for run in runs:
+        if run.get("decode_status", "not-run") != "not-run":
+            latest = run
+    return latest
+
+
 def visible_history_runs(
     runs: list[dict[str, Any]], display_limit: int
 ) -> list[dict[str, Any]]:
@@ -1222,14 +1240,42 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def latest_decode_payload(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    if run is None:
+        return None
+    return {
+        "run_id": run["run_id"],
+        "status": run.get("decode_status", "not-run"),
+        "decode_parallelism": run.get("decode_parallelism"),
+        "completed_at": run["completed_at"],
+        "machine_ip": run["machine_ip"],
+        "model": run["model"],
+        "decode_window_p50_throughput": run.get(
+            "decode_window_p50_throughput"
+        ),
+        "decode_peak_active_tpot_p50_ms": run.get(
+            "decode_peak_active_tpot_p50_ms"
+        ),
+        "torchtpu_vllm_revision": run["torchtpu_vllm_revision"],
+        "torch_tpu_revision": run["torch_tpu_revision"],
+        "torch_tpu_version": run["torch_tpu_version"],
+    }
+
+
 def render_latest_json(runs: list[dict[str, Any]]) -> str:
     latest = latest_runs_by_config(runs)
+    latest_prefill = latest_prefill_runs_by_config(runs)
     payload = {
         "schema_version": SCHEMA_VERSION,
-        "updated_at": max(run["completed_at"] for run in latest.values()),
+        "updated_at": max(run["completed_at"] for run in runs),
         "benchmarks": {
             config: latest_run_payload(run) for config, run in sorted(latest.items())
         },
+        "prefill_benchmarks": {
+            config: latest_run_payload(run)
+            for config, run in sorted(latest_prefill.items())
+        },
+        "decode": latest_decode_payload(latest_decode_run(runs)),
     }
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
 
@@ -1331,7 +1377,7 @@ def table_metric(value: Any, *, decimals: int = 2) -> str:
 
 
 def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
-    latest = latest_runs_by_config(runs)
+    latest = latest_prefill_runs_by_config(runs)
     latest_ttft = latest_ttft_runs_by_config(runs)
     latest_lines = []
     for config, style in BENCHMARK_CONFIGS.items():
@@ -1639,7 +1685,7 @@ def main() -> None:
             ttft_status=ttft_status,
         )
         runs = update_history(load_history(history_path), record)
-        latest = latest_runs_by_config(runs)
+        latest = latest_prefill_runs_by_config(runs)
         homepage_series, homepage_labels = concurrency_chart_data(latest)
         visible_runs = visible_history_runs(runs, args.display_limit)
         history_series, history_labels = history_chart_data(visible_runs)

@@ -94,11 +94,19 @@ with open(sys.argv[1], encoding="utf-8") as file:
 benchmarks = latest.get("benchmarks")
 if not isinstance(benchmarks, dict) or not benchmarks:
     raise SystemExit("latest.json does not contain benchmark results")
+prefill_benchmarks = latest.get("prefill_benchmarks")
+if not isinstance(prefill_benchmarks, dict):
+    prefill_benchmarks = benchmarks
+decode_latest = latest.get("decode")
 with open(sys.argv[2], encoding="utf-8") as file:
     speed_latest = json.load(file).get("benchmark")
-candidates = list(benchmarks.values())
+candidates = list(prefill_benchmarks.values())
+if isinstance(decode_latest, dict):
+    candidates.append(decode_latest)
 if isinstance(speed_latest, dict):
     candidates.append(speed_latest)
+if not candidates:
+    raise SystemExit("latest reports do not contain publishable benchmark results")
 newest = max(candidates, key=lambda item: item["completed_at"])
 run_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(newest["run_id"]))
 
@@ -108,15 +116,23 @@ def throughput_text(result):
     return "N/A" if value is None else f"{float(value):.2f}"
 
 
-summary = ", ".join(
+summary_parts = [
     f"{config.upper()} {throughput_text(result)}"
-    for config, result in sorted(benchmarks.items())
-)
+    for config, result in sorted(prefill_benchmarks.items())
+]
+if isinstance(decode_latest, dict):
+    decode_value = decode_latest.get("decode_window_p50_throughput")
+    decode_text = "N/A" if decode_value is None else f"{float(decode_value):.2f}"
+    decode_parallelism = str(
+        decode_latest.get("decode_parallelism") or "decode"
+    ).replace("/EP8", "")
+    summary_parts.append(f"DECODE-{decode_parallelism} {decode_text}")
 if isinstance(speed_latest, dict):
     speed_value = speed_latest.get("input_token_throughput")
     speed_text = "N/A" if speed_value is None else f"{float(speed_value):.2f}"
     speed_config = str(speed_latest.get("benchmark_config", "dp8")).upper()
-    summary += f", SPEED-{speed_config} {speed_text} input"
+    summary_parts.append(f"SPEED-{speed_config} {speed_text} input")
+summary = ", ".join(summary_parts)
 print(run_id)
 print(summary)
 PY

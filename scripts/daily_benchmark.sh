@@ -720,8 +720,8 @@ run_decode_smoke() {
     --decode-tokens 32 \
     --tokenizer-dir "$MODEL_DIR" \
     --rounds 1 \
-    --window-seconds 10 \
-    --step-seconds 1 \
+    --window-seconds 0.1 \
+    --step-seconds 0.05 \
     --cache-salt-prefix "tpu-daily-${timestamp}-smoke" \
     2>&1 | tee "$RUN_DIR/dp8_decode_c256_smoke.log"
 }

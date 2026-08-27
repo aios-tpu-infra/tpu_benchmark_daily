@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure peak-active decode throughput and TPOT with sliding windows.
+"""Measure strict full-concurrency decode throughput and TPOT.
 
 Every request uses a deterministic but distinct natural-language-derived token
 prompt and the same decode length. The workload dimensions are intentionally
@@ -76,6 +76,13 @@ def nonnegative_float(raw: str) -> float:
     value = float(raw)
     if not math.isfinite(value) or value < 0:
         raise argparse.ArgumentTypeError("value must be a non-negative number")
+    return value
+
+
+def nonnegative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be a non-negative integer")
     return value
 
 
@@ -299,15 +306,17 @@ def analyze_round(
     concurrency: int,
     window_s: float,
     step_s: float,
+    min_full_overlap_s: float,
+    min_full_overlap_tokens: int,
 ) -> RoundAnalysis:
     failures = [
         {
             "request_id": result.request_id,
             "received_tokens": len(result.token_times_s),
-            "error": result.error or "stream returned no completion tokens",
+            "error": result.error or "stream returned fewer than two tokens",
         }
         for result in results
-        if result.error is not None or not result.token_times_s
+        if result.error is not None or len(result.token_times_s) < 2
     ]
     batch_start_s = min((result.started_s for result in results), default=0.0)
     request_tpots = build_request_tpot_rows(
@@ -323,6 +332,8 @@ def analyze_round(
         "full_overlap_start_after_batch_start_s": None,
         "full_overlap_end_after_batch_start_s": None,
         "full_overlap_duration_s": 0.0,
+        "full_overlap_token_count": 0,
+        "full_overlap_throughput_tok_s": None,
         "active_requests_max": 0,
         "timeline_valid_full_concurrency_decode": False,
         "full_concurrency_window_count": 0,
@@ -352,11 +363,26 @@ def analyze_round(
     full_start_s = max(result.token_times_s[1] for result in results)
     full_end_s = min(result.token_times_s[-1] for result in results)
     full_duration_s = max(0.0, full_end_s - full_start_s)
+    all_token_times = sorted(
+        timestamp for result in results for timestamp in result.token_times_s
+    )
+    full_token_left = bisect.bisect_left(all_token_times, full_start_s)
+    full_token_right = bisect.bisect_left(all_token_times, full_end_s)
+    full_overlap_token_count = full_token_right - full_token_left
+    full_overlap_throughput = (
+        full_overlap_token_count / full_duration_s
+        if full_duration_s > 0
+        else None
+    )
     summary.update(
         {
             "full_overlap_start_after_batch_start_s": full_start_s - batch_start_s,
             "full_overlap_end_after_batch_start_s": full_end_s - batch_start_s,
             "full_overlap_duration_s": full_duration_s,
+            "full_overlap_token_count": full_overlap_token_count,
+            "full_overlap_throughput_tok_s": full_overlap_throughput,
+            "active_requests_max": concurrency if full_duration_s > 0 else 0,
+            "timeline_valid_full_concurrency_decode": full_duration_s > 0,
             "submit_skew_s": max(starts_s) - min(starts_s),
             "first_token_skew_s": max(firsts_s) - min(firsts_s),
             "ttft_s": metric_stats(
@@ -370,28 +396,29 @@ def analyze_round(
             ),
         }
     )
-    all_token_times = sorted(
-        timestamp for result in results for timestamp in result.token_times_s
-    )
     decode_intervals = [
         (result.token_times_s[1], result.token_times_s[-1])
         for result in results
     ]
-    scan_start_s = min(start_s for start_s, _ in decode_intervals)
-    scan_end_s = max(end_s for _, end_s in decode_intervals)
-    if scan_end_s - scan_start_s < window_s:
-        summary["invalid_reason"] = "decode_span_shorter_than_window"
+    if full_duration_s < min_full_overlap_s:
+        summary["invalid_reason"] = "full_overlap_shorter_than_minimum"
+        return RoundAnalysis(summary, [], request_tpots)
+    if full_overlap_token_count < min_full_overlap_tokens:
+        summary["invalid_reason"] = "full_overlap_has_too_few_tokens"
+        return RoundAnalysis(summary, [], request_tpots)
+    if full_duration_s + 1e-9 < window_s:
+        summary["invalid_reason"] = "full_overlap_shorter_than_window"
         return RoundAnalysis(summary, [], request_tpots)
 
     candidate_windows: list[dict[str, Any]] = []
-    cursor_s = scan_start_s
-    while cursor_s + window_s <= scan_end_s + 1e-9:
+    cursor_s = full_start_s
+    while cursor_s + window_s <= full_end_s + 1e-9:
         end_s = cursor_s + window_s
         active_requests = sum(
             interval_start_s <= cursor_s and interval_end_s >= end_s
             for interval_start_s, interval_end_s in decode_intervals
         )
-        if active_requests == 0:
+        if active_requests != concurrency:
             cursor_s += step_s
             continue
         token_left = bisect.bisect_left(all_token_times, cursor_s)
@@ -410,42 +437,30 @@ def analyze_round(
         )
         cursor_s += step_s
 
-    active_requests_max = max(
-        (int(window["active_requests"]) for window in candidate_windows),
-        default=0,
-    )
-    windows = [
-        window
-        for window in candidate_windows
-        if window["active_requests"] == active_requests_max
-    ]
+    windows = candidate_windows
     for index, window in enumerate(windows, start=1):
         window["window"] = index
     throughputs = [float(window["throughput_tok_s"]) for window in windows]
-    peak_start_s = min(
-        float(window["start_after_batch_start_s"]) for window in windows
-    ) + batch_start_s
-    peak_end_s = max(
-        float(window["end_after_batch_start_s"]) for window in windows
-    ) + batch_start_s
-    peak_active_itls_ms = [
-        (current_s - previous_s) * 1000
-        for result in results
-        for previous_s, current_s in zip(
-            result.token_times_s, result.token_times_s[1:]
+    if windows:
+        peak_start_s = full_start_s
+        peak_end_s = (
+            float(windows[-1]["end_after_batch_start_s"]) + batch_start_s
         )
-        if peak_start_s <= current_s < peak_end_s
-    ]
+        peak_active_itls_ms = [
+            (current_s - previous_s) * 1000
+            for result in results
+            for previous_s, current_s in zip(
+                result.token_times_s, result.token_times_s[1:]
+            )
+            if peak_start_s <= current_s < peak_end_s
+        ]
+    else:
+        peak_active_itls_ms = []
     summary.update(
         {
-            "active_requests_max": active_requests_max,
-            "timeline_valid_full_concurrency_decode": (
-                active_requests_max == concurrency
-            ),
-            "full_concurrency_window_count": sum(
-                window["active_requests"] == concurrency
-                for window in candidate_windows
-            ),
+            "active_requests_max": concurrency if windows else 0,
+            "timeline_valid_full_concurrency_decode": bool(windows),
+            "full_concurrency_window_count": len(windows),
             "window_count": len(windows),
             "window_throughput_tok_s": metric_stats(throughputs),
             "peak_active_tpot_ms": metric_stats(peak_active_itls_ms),
@@ -510,6 +525,8 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
         "ttft_p90_s",
         "end_to_end_throughput_tok_s",
         "full_overlap_duration_s",
+        "full_overlap_token_count",
+        "full_overlap_throughput_tok_s",
         "active_requests_max",
         "timeline_valid_full_concurrency_decode",
         "full_concurrency_window_count",
@@ -562,6 +579,12 @@ def write_rounds_csv(path: Path, rounds: list[dict[str, Any]]) -> None:
                         "end_to_end_throughput_tok_s"
                     ],
                     "full_overlap_duration_s": row["full_overlap_duration_s"],
+                    "full_overlap_token_count": row[
+                        "full_overlap_token_count"
+                    ],
+                    "full_overlap_throughput_tok_s": row[
+                        "full_overlap_throughput_tok_s"
+                    ],
                     "active_requests_max": row["active_requests_max"],
                     "timeline_valid_full_concurrency_decode": row[
                         "timeline_valid_full_concurrency_decode"
@@ -623,6 +646,7 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
     benchmark = summary["benchmark"]
     aggregate = summary["aggregate"]
     throughput = aggregate["window_throughput_tok_s"]
+    full_overlap_throughput = aggregate["full_overlap_throughput_tok_s"]
     peak_active_tpot = aggregate["peak_active_tpot_p50_ms"]
     request_tpot = aggregate["request_tpot_ms"]
     valid_rounds = summary["valid_rounds"]
@@ -652,8 +676,13 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"- Tokenizer：`{benchmark['tokenizer_dir']}`",
         f"- 滑动窗口：`{benchmark['window_s']}` 秒，步长 `{benchmark['step_s']}` 秒",
         (
-            "- 窗口选择：扫描各请求第 2 个输出 token 至最后一个输出 token，"
-            "保留能完整覆盖整个窗口的活跃请求数达到本轮峰值的窗口。"
+            "- 窗口选择：从严格满并发起点对齐，只保留完整覆盖窗口期间"
+            f"始终有 `{benchmark['concurrency']}` 条活跃 decode 请求的窗口。"
+        ),
+        (
+            "- 有效性门槛：严格满并发至少持续 "
+            f"`{benchmark['min_full_overlap_s']}` 秒，且至少产生 "
+            f"`{benchmark['min_full_overlap_tokens']}` 个 token。"
         ),
         (
             "- 主 TPOT：与 tpu-misc 相同，统计 peak-active 窗口覆盖范围内"
@@ -674,6 +703,17 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
             f"{format_metric(throughput['p50'])}|"
             f"{format_metric(throughput['p90'])}|"
             f"{format_metric(throughput['p99'])}|"
+        ),
+        (
+            "|Full-overlap throughput (tok/s)|"
+            f"{full_overlap_throughput['count']}|"
+            f"{format_metric(full_overlap_throughput['avg'])}|"
+            f"{format_metric(full_overlap_throughput['min'])}|"
+            f"{format_metric(full_overlap_throughput['max'])}|"
+            f"{format_metric(full_overlap_throughput['stddev'])}|"
+            f"{format_metric(full_overlap_throughput['p50'])}|"
+            f"{format_metric(full_overlap_throughput['p90'])}|"
+            f"{format_metric(full_overlap_throughput['p99'])}|"
         ),
         (
             "|Peak-active TPOT P50 across rounds (ms)|"
@@ -710,23 +750,34 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"  --tokenizer-dir {benchmark['tokenizer_dir']} \\",
         f"  --rounds {requested_rounds} \\",
         f"  --window-seconds {benchmark['window_s']} \\",
-        f"  --step-seconds {benchmark['step_s']}",
+        f"  --step-seconds {benchmark['step_s']} \\",
+        (
+            "  --min-full-overlap-seconds "
+            f"{benchmark['min_full_overlap_s']} \\"
+        ),
+        (
+            "  --min-full-overlap-tokens "
+            f"{benchmark['min_full_overlap_tokens']}"
+        ),
         "```",
         "",
         "## 轮次",
         "",
         (
-            "|round|valid|requests|peak active|full overlap (s)|windows|"
-            "throughput P50 (tok/s)|Peak TPOT P50 (ms)|reason|"
+            "|round|valid|requests|peak active|full overlap (s)|"
+            "full-overlap tok/s|windows|throughput P50 (tok/s)|"
+            "Peak TPOT P50 (ms)|reason|"
         ),
-        "|---:|:---:|---:|---:|---:|---:|---:|---:|---|",
+        "|---:|:---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in summary["results"]:
         lines.append(
             f"|{row['round']}|{row['valid']}|"
             f"{row['successful_requests']}/{benchmark['concurrency']}|"
             f"{row['active_requests_max']}|"
-            f"{format_metric(row['full_overlap_duration_s'])}|{row['window_count']}|"
+            f"{format_metric(row['full_overlap_duration_s'])}|"
+            f"{format_metric(row['full_overlap_throughput_tok_s'])}|"
+            f"{row['window_count']}|"
             f"{format_metric(row['window_throughput_tok_s']['p50'])}|"
             f"{format_metric(row['peak_active_tpot_ms']['p50'])}|"
             f"{row['invalid_reason']}|"
@@ -737,8 +788,8 @@ def write_markdown(path: Path, summary: dict[str, Any]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run distinct concurrent prefill/decode requests and measure their "
-            "peak-active decode intervals with sliding windows."
+            "Run distinct concurrent prefill/decode requests and measure "
+            "strict full-concurrency decode intervals with sliding windows."
         )
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:18100")
@@ -753,6 +804,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-salt-prefix", default="")
     parser.add_argument("--window-seconds", type=positive_float, default=10.0)
     parser.add_argument("--step-seconds", type=positive_float, default=1.0)
+    parser.add_argument(
+        "--min-full-overlap-seconds",
+        type=nonnegative_float,
+        default=0.0,
+        help="Require at least this many seconds of strict full concurrency.",
+    )
+    parser.add_argument(
+        "--min-full-overlap-tokens",
+        type=nonnegative_int,
+        default=0,
+        help="Require this many tokens in the strict full-overlap interval.",
+    )
     parser.add_argument(
         "--request-timeout-seconds", type=positive_float, default=3600.0
     )
@@ -838,6 +901,8 @@ def main() -> None:
             concurrency=args.concurrency,
             window_s=args.window_seconds,
             step_s=args.step_seconds,
+            min_full_overlap_s=args.min_full_overlap_seconds,
+            min_full_overlap_tokens=args.min_full_overlap_tokens,
         )
         round_summaries.append(analysis.summary)
         all_windows.extend(analysis.windows)
@@ -847,6 +912,8 @@ def main() -> None:
             f"peak_active={analysis.summary['active_requests_max']} "
             f"windows={analysis.summary['window_count']} "
             f"throughput_p50={analysis.summary['window_throughput_tok_s']['p50']} "
+            f"full_overlap_throughput="
+            f"{analysis.summary['full_overlap_throughput_tok_s']} "
             f"peak_active_tpot_p50_ms="
             f"{analysis.summary['peak_active_tpot_ms']['p50']}",
             flush=True,
@@ -864,10 +931,12 @@ def main() -> None:
         default=None,
     )
     summary = {
-        "schema_version": 4,
+        "schema_version": 5,
         "created_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "benchmark": {
-            "benchmark_config": "dp8_decode_c256",
+            "benchmark_config": (
+                f"dp{args.data_parallel_size}_decode_c{args.concurrency}"
+            ),
             "base_url": base_url,
             "model": args.model,
             "input_length": args.prefill_tokens,
@@ -883,7 +952,9 @@ def main() -> None:
             "identical_prompt_for_all_requests": False,
             "window_s": args.window_seconds,
             "step_s": args.step_seconds,
-            "boundary": "peak_active_complete_sliding_windows",
+            "min_full_overlap_s": args.min_full_overlap_seconds,
+            "min_full_overlap_tokens": args.min_full_overlap_tokens,
+            "boundary": "strict_full_concurrency_aligned_sliding_windows",
             "token_accounting": "continuous_usage_completion_tokens",
         },
         "best": (
@@ -894,6 +965,9 @@ def main() -> None:
                 "file": "rounds.csv",
                 "mean_tpot_ms": best_round["peak_active_tpot_ms"]["p50"],
                 "output_throughput": best_round["window_throughput_tok_s"]["p50"],
+                "full_overlap_throughput": best_round[
+                    "full_overlap_throughput_tok_s"
+                ],
                 "p99_tpot_ms": best_round["peak_active_tpot_ms"]["p99"],
                 "round": best_round["round"],
             }
@@ -904,6 +978,13 @@ def main() -> None:
         "valid_rounds": len(valid_rounds),
         "aggregate": {
             "window_throughput_tok_s": metric_stats(all_throughputs),
+            "full_overlap_throughput_tok_s": metric_stats(
+                [
+                    float(row["full_overlap_throughput_tok_s"])
+                    for row in valid_rounds
+                    if row["full_overlap_throughput_tok_s"] is not None
+                ]
+            ),
             "request_tpot_ms": metric_stats(
                 [float(row["tpot_ms"]) for row in all_request_tpots]
             ),
@@ -961,8 +1042,18 @@ def main() -> None:
         raise SystemExit(
             f"decode benchmark has {failed_requests} failed requests"
         )
+    invalid_rounds = [row for row in round_summaries if not row["valid"]]
+    if invalid_rounds:
+        reasons = ", ".join(
+            f"round {row['round']}: {row['invalid_reason']}"
+            for row in invalid_rounds
+        )
+        raise SystemExit(f"decode benchmark has invalid rounds: {reasons}")
     aggregate = summary["aggregate"]
     throughput_p50 = aggregate["window_throughput_tok_s"]["p50"]
+    full_overlap_throughput = aggregate["full_overlap_throughput_tok_s"][
+        "p50"
+    ]
     peak_tpot_avg = aggregate["peak_active_tpot_p50_ms"]["avg"]
     if throughput_p50 is None or peak_tpot_avg is None:
         print(
@@ -973,6 +1064,8 @@ def main() -> None:
         print(
             "[done] "
             f"throughput_p50={throughput_p50:.3f} tok/s "
+            f"full_overlap_throughput_p50="
+            f"{full_overlap_throughput:.3f} tok/s "
             f"peak_active_tpot_p50_avg={peak_tpot_avg:.3f} ms "
             f"output={args.output_dir}",
             flush=True,

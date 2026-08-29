@@ -281,16 +281,19 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn('--block-size "$BLOCK_SIZE"', decode_script)
         self.assertIn('block_size_args=(--block-size "$BLOCK_SIZE")', prefill_script)
 
-    def test_prefill_server_supports_optional_block_size(self) -> None:
-        automatic = self.run_script(
+    def test_prefill_server_uses_config_specific_block_sizes(self) -> None:
+        dp = self.run_script(
             "start_prefill_server.sh", "--config", "dp8", "--test-only"
+        )
+        pcp = self.run_script(
+            "start_prefill_server.sh", "--config", "pcp8", "--test-only"
         )
         explicit = self.run_script(
             "start_prefill_server.sh",
             "--config",
             "dp8",
             "--test-only",
-            environment={"BLOCK_SIZE": "4352"},
+            environment={"BLOCK_SIZE": "4096"},
         )
         invalid = self.run_script(
             "start_prefill_server.sh",
@@ -300,10 +303,12 @@ class TestOnlyScriptsTest(unittest.TestCase):
             environment={"BLOCK_SIZE": "4225"},
         )
 
-        self.assertEqual(automatic.returncode, 0, automatic.stderr)
-        self.assertIn("KV block size:             auto-derived", automatic.stdout)
+        self.assertEqual(dp.returncode, 0, dp.stderr)
+        self.assertIn("KV block size:             4352", dp.stdout)
+        self.assertEqual(pcp.returncode, 0, pcp.stderr)
+        self.assertIn("KV block size:             768", pcp.stdout)
         self.assertEqual(explicit.returncode, 0, explicit.stderr)
-        self.assertIn("KV block size:             4352", explicit.stdout)
+        self.assertIn("KV block size:             4096", explicit.stdout)
         self.assertEqual(invalid.returncode, 2)
         self.assertIn("BLOCK_SIZE must be a multiple of 128", invalid.stderr)
 
@@ -325,7 +330,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("batched RPA longctx:       0", pcp.stdout)
         self.assertIn("DP RPA seq-on-lane:        0", pcp.stdout)
         self.assertIn("PCP RPA seq-on-lane:       1", pcp.stdout)
-        self.assertIn("CP KV interleave size:     128", pcp.stdout)
+        self.assertIn("CP KV interleave size:     256", pcp.stdout)
 
     def test_all_server_configs_enable_parallel_precompile(self) -> None:
         for script_name in (

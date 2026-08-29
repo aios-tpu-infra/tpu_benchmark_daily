@@ -60,6 +60,9 @@ case "$BENCHMARK_CONFIG" in
     LONG_PREFILL_TOKEN_THRESHOLD=
     TPU_MOE_SKIP_PADDED_TOKENS="${TPU_MOE_SKIP_PADDED_TOKENS:-1}"
     TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-16384}"
+    USE_BATCHED_RPA_LONGCTX="${USE_BATCHED_RPA_LONGCTX:-1}"
+    USE_BATCHED_RPA_SEQ_ON_LANE="${USE_BATCHED_RPA_SEQ_ON_LANE:-1}"
+    USE_PCP_BATCHED_RPA_SEQ_ON_LANE="${USE_PCP_BATCHED_RPA_SEQ_ON_LANE:-0}"
     ;;
   pcp8)
     CONFIG_LABEL=PCP8
@@ -72,6 +75,9 @@ case "$BENCHMARK_CONFIG" in
     LONG_PREFILL_TOKEN_THRESHOLD="${LONG_PREFILL_TOKEN_THRESHOLD:-32768}"
     TPU_MOE_SKIP_PADDED_TOKENS="${TPU_MOE_SKIP_PADDED_TOKENS:-0}"
     TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-16384}"
+    USE_BATCHED_RPA_LONGCTX="${USE_BATCHED_RPA_LONGCTX:-0}"
+    USE_BATCHED_RPA_SEQ_ON_LANE="${USE_BATCHED_RPA_SEQ_ON_LANE:-0}"
+    USE_PCP_BATCHED_RPA_SEQ_ON_LANE="${USE_PCP_BATCHED_RPA_SEQ_ON_LANE:-1}"
     ;;
   *)
     echo "ERROR: --config must be dp8 or pcp8, got '$BENCHMARK_CONFIG'." >&2
@@ -98,6 +104,8 @@ USE_MOE_FUSED_EP_KERNEL="${USE_MOE_FUSED_EP_KERNEL:-1}"
 MOE_FUSED_EP_KERNEL_MIN_TOKENS="${MOE_FUSED_EP_KERNEL_MIN_TOKENS:-1024}"
 MOE_FUSED_EP_V2_SHARDED_PLAN="${MOE_FUSED_EP_V2_SHARDED_PLAN:-1}"
 MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER="${MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER:-1}"
+CP_KV_CACHE_INTERLEAVE_SIZE="${CP_KV_CACHE_INTERLEAVE_SIZE:-}"
+BLOCK_SIZE="${BLOCK_SIZE:-}"
 
 require_uint() {
   local name=$1
@@ -173,6 +181,45 @@ case "${TPU_PARALLEL_PRECOMPILE,,}" in
     exit 2
     ;;
 esac
+case "${USE_BATCHED_RPA_LONGCTX,,}" in
+  1|true) USE_BATCHED_RPA_LONGCTX=1 ;;
+  0|false) USE_BATCHED_RPA_LONGCTX=0 ;;
+  *)
+    echo "ERROR: USE_BATCHED_RPA_LONGCTX must be a boolean, got '$USE_BATCHED_RPA_LONGCTX'." >&2
+    exit 2
+    ;;
+esac
+case "${USE_BATCHED_RPA_SEQ_ON_LANE,,}" in
+  1|true) USE_BATCHED_RPA_SEQ_ON_LANE=1 ;;
+  0|false) USE_BATCHED_RPA_SEQ_ON_LANE=0 ;;
+  *)
+    echo "ERROR: USE_BATCHED_RPA_SEQ_ON_LANE must be a boolean, got '$USE_BATCHED_RPA_SEQ_ON_LANE'." >&2
+    exit 2
+    ;;
+esac
+case "${USE_PCP_BATCHED_RPA_SEQ_ON_LANE,,}" in
+  1|true) USE_PCP_BATCHED_RPA_SEQ_ON_LANE=1 ;;
+  0|false) USE_PCP_BATCHED_RPA_SEQ_ON_LANE=0 ;;
+  *)
+    echo "ERROR: USE_PCP_BATCHED_RPA_SEQ_ON_LANE must be a boolean, got '$USE_PCP_BATCHED_RPA_SEQ_ON_LANE'." >&2
+    exit 2
+    ;;
+esac
+if [[ -z "$CP_KV_CACHE_INTERLEAVE_SIZE" ]]; then
+  if (( USE_PCP_BATCHED_RPA_SEQ_ON_LANE )); then
+    CP_KV_CACHE_INTERLEAVE_SIZE=128
+  else
+    CP_KV_CACHE_INTERLEAVE_SIZE=256
+  fi
+fi
+require_uint CP_KV_CACHE_INTERLEAVE_SIZE "$CP_KV_CACHE_INTERLEAVE_SIZE"
+if [[ -n "$BLOCK_SIZE" ]]; then
+  require_uint BLOCK_SIZE "$BLOCK_SIZE"
+  if (( BLOCK_SIZE % 128 != 0 )); then
+    echo "ERROR: BLOCK_SIZE must be a multiple of 128 for the CUSTOM attention backend, got '$BLOCK_SIZE'." >&2
+    exit 2
+  fi
+fi
 
 if (( TEST_ONLY )); then
   echo "TEST_ONLY: $CONFIG_LABEL server startup skipped."
@@ -189,6 +236,11 @@ if (( TEST_ONLY )); then
   echo "fused EP minimum tokens:  $MOE_FUSED_EP_KERNEL_MIN_TOKENS"
   echo "sharded routing plan:     $MOE_FUSED_EP_V2_SHARDED_PLAN"
   echo "split activation gather:  $MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER"
+  echo "batched RPA longctx:       $USE_BATCHED_RPA_LONGCTX"
+  echo "DP RPA seq-on-lane:        $USE_BATCHED_RPA_SEQ_ON_LANE"
+  echo "PCP RPA seq-on-lane:       $USE_PCP_BATCHED_RPA_SEQ_ON_LANE"
+  echo "CP KV interleave size:     $CP_KV_CACHE_INTERLEAVE_SIZE"
+  echo "KV block size:             ${BLOCK_SIZE:-auto-derived}"
   if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
     echo "long prefill threshold:  $LONG_PREFILL_TOKEN_THRESHOLD"
   fi
@@ -225,12 +277,13 @@ TORCH_TPU_VERSION=$(
     'from importlib.metadata import version; print(version("torch-tpu"))'
 )
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
+BLOCK_SIZE_CACHE_KEY=${BLOCK_SIZE:-auto}
 case "$BENCHMARK_CONFIG" in
   dp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepmin${MOE_FUSED_EP_KERNEL_MIN_TOKENS}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_fepsag${MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE_CACHE_KEY}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepmin${MOE_FUSED_EP_KERNEL_MIN_TOKENS}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_fepsag${MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER}_rpalong${USE_BATCHED_RPA_LONGCTX}_rpasol${USE_BATCHED_RPA_SEQ_ON_LANE}_pcprpasol${USE_PCP_BATCHED_RPA_SEQ_ON_LANE}_cpkvi${CP_KV_CACHE_INTERLEAVE_SIZE}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
   pcp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepmin${MOE_FUSED_EP_KERNEL_MIN_TOKENS}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_fepsag${MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE_CACHE_KEY}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepmin${MOE_FUSED_EP_KERNEL_MIN_TOKENS}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_fepsag${MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER}_rpalong${USE_BATCHED_RPA_LONGCTX}_rpasol${USE_BATCHED_RPA_SEQ_ON_LANE}_pcprpasol${USE_PCP_BATCHED_RPA_SEQ_ON_LANE}_cpkvi${CP_KV_CACHE_INTERLEAVE_SIZE}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
 esac
 
@@ -259,6 +312,9 @@ export USE_MOE_FUSED_EP_KERNEL
 export MOE_FUSED_EP_KERNEL_MIN_TOKENS
 export MOE_FUSED_EP_V2_SHARDED_PLAN
 export MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER
+export USE_BATCHED_RPA_LONGCTX
+export USE_BATCHED_RPA_SEQ_ON_LANE
+export USE_PCP_BATCHED_RPA_SEQ_ON_LANE
 export VLLM_ENGINE_READY_TIMEOUT_S
 
 # Keep every configurable compilation cache on project storage. By default the
@@ -390,6 +446,11 @@ if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
   )
 fi
 
+block_size_args=()
+if [[ -n "$BLOCK_SIZE" ]]; then
+  block_size_args=(--block-size "$BLOCK_SIZE")
+fi
+
 echo "Starting $SERVED_MODEL_NAME from offline metadata at $MODEL_DIR"
 echo "vllm-torchtpu revision: $SOURCE_REV"
 echo "torch_tpu version:       $TORCH_TPU_VERSION"
@@ -402,13 +463,26 @@ echo "compile cache: $COMPILE_CACHE_ROOT ($COMPILE_CACHE_ACTION before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
-echo "unified block pool: enabled (block size auto-derived)"
+if [[ -n "$BLOCK_SIZE" ]]; then
+  echo "unified block pool: enabled (block size floor $BLOCK_SIZE)"
+else
+  echo "unified block pool: enabled (block size auto-derived)"
+fi
 echo "skip padded MoE tokens: $TPU_MOE_SKIP_PADDED_TOKENS"
 echo "MoE collection chunk size: $TPU_MOE_COLLECTION_CHUNK_SIZE"
 echo "fused EP MoE kernel: $USE_MOE_FUSED_EP_KERNEL"
 echo "fused EP minimum tokens: $MOE_FUSED_EP_KERNEL_MIN_TOKENS"
 echo "sharded routing plan: $MOE_FUSED_EP_V2_SHARDED_PLAN"
 echo "split activation gather: $MOE_FUSED_EP_V2_SPLIT_ACTIVATION_GATHER"
+echo "batched RPA longctx: $USE_BATCHED_RPA_LONGCTX"
+echo "DP RPA seq-on-lane: $USE_BATCHED_RPA_SEQ_ON_LANE"
+echo "PCP RPA seq-on-lane: $USE_PCP_BATCHED_RPA_SEQ_ON_LANE"
+echo "CP KV interleave size: $CP_KV_CACHE_INTERLEAVE_SIZE"
+if [[ -n "$BLOCK_SIZE" ]]; then
+  echo "KV block size: $BLOCK_SIZE (explicit floor)"
+else
+  echo "KV block size: auto-derived"
+fi
 
 ensure_uv_on_path
 ensure_vllm_service_launcher "$VLLM_SERVICE_LAUNCH"
@@ -431,6 +505,7 @@ exec "$VLLM_SERVICE_LAUNCH" start \
   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
   "${long_prefill_args[@]}" \
   --max-num-seqs "$MAX_NUM_SEQS" \
+  "${block_size_args[@]}" \
   --data-parallel-size "$DATA_PARALLEL_SIZE" \
   --attention-backend CUSTOM \
   --gpu-memory-utilization 0.90 \
@@ -440,7 +515,7 @@ exec "$VLLM_SERVICE_LAUNCH" start \
   --disable-custom-all-reduce \
   --no-enable-prefix-caching \
   --prefill-context-parallel-size "$PREFILL_CONTEXT_PARALLEL_SIZE" \
-  --cp-kv-cache-interleave-size 256 \
+  --cp-kv-cache-interleave-size "$CP_KV_CACHE_INTERLEAVE_SIZE" \
   --no-disable-hybrid-kv-cache-manager \
   --tensor-parallel-size 1 \
   --return-tokens-as-token-ids \

@@ -121,7 +121,9 @@ summary_parts = [
     for config, result in sorted(prefill_benchmarks.items())
 ]
 if isinstance(decode_latest, dict):
-    decode_value = decode_latest.get("decode_window_p50_throughput")
+    decode_value = decode_latest.get("decode_peak_1s_throughput")
+    if decode_value is None:
+        decode_value = decode_latest.get("decode_window_p50_throughput")
     decode_text = "N/A" if decode_value is None else f"{float(decode_value):.2f}"
     decode_parallelism = str(
         decode_latest.get("decode_parallelism") or "decode"

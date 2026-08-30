@@ -48,6 +48,7 @@ class DecodeSlidingWindowTest(unittest.TestCase):
 
         self.assertEqual(args.data_parallel_size, 4)
         self.assertEqual(args.tensor_parallel_size, 2)
+        self.assertEqual(args.min_peak_active_fraction, 0.9)
 
     def analyze(
         self, results: list[object], window_s: float = 8.0
@@ -60,6 +61,7 @@ class DecodeSlidingWindowTest(unittest.TestCase):
             step_s=1.0,
             min_full_overlap_s=0.0,
             min_full_overlap_tokens=0,
+            min_peak_active_fraction=0.5,
         )
 
     def test_uses_actual_peak_sustained_concurrency(self) -> None:
@@ -117,6 +119,54 @@ class DecodeSlidingWindowTest(unittest.TestCase):
         self.assertEqual(analysis.summary["full_overlap_token_count"], 0)
         self.assertIsNone(
             analysis.summary["full_overlap_throughput_tok_s"]
+        )
+
+    def test_reports_highest_qualified_one_second_window(self) -> None:
+        results = [
+            BENCHMARK.RequestResult(
+                request_id=request_id,
+                started_s=0.0,
+                finished_s=10.0,
+                token_times_s=[
+                    0.0,
+                    1.0,
+                    2.0,
+                    3.0,
+                    *([5.25] * 25),
+                    6.0,
+                    7.0,
+                    8.0,
+                    9.0,
+                    10.0,
+                ],
+                error=None,
+            )
+            for request_id in range(4)
+        ]
+
+        analysis = BENCHMARK.analyze_round(
+            round_index=1,
+            results=results,
+            concurrency=4,
+            window_s=1.0,
+            step_s=0.5,
+            min_full_overlap_s=0.0,
+            min_full_overlap_tokens=0,
+            min_peak_active_fraction=0.9,
+        )
+
+        self.assertEqual(
+            analysis.summary["peak_window_min_active_requests"], 4
+        )
+        self.assertEqual(
+            analysis.summary["peak_window_active_requests"], 4
+        )
+        self.assertEqual(
+            analysis.summary["peak_window_throughput_tok_s"], 100.0
+        )
+        self.assertGreater(
+            analysis.summary["peak_window_throughput_tok_s"],
+            analysis.summary["window_throughput_tok_s"]["p50"],
         )
 
 

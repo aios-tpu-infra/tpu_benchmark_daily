@@ -21,11 +21,13 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 README_START = "<!-- BENCHMARK_REPORT_START -->"
 README_END = "<!-- BENCHMARK_REPORT_END -->"
 LEGACY_DECODE_THROUGHPUT_FIELD = "decode_legacy_peak_output_throughput"
 LEGACY_DECODE_TPOT_FIELD = "decode_legacy_min_tpot_ms"
+DECODE_PEAK_WINDOW_FIELD = "decode_peak_1s_throughput"
+DECODE_PEAK_WINDOW_TPOT_FIELD = "decode_peak_1s_tpot_p50_ms"
 CURRENT_DECODE_PARALLELISM = "DP4/TP2/EP8"
 BENCHMARK_CONFIGS = {
     "dp8": {"label": "DP8", "color": "#1570ef"},
@@ -50,6 +52,8 @@ CSV_FIELDS = (
     "p99_ttft_ms",
     LEGACY_DECODE_THROUGHPUT_FIELD,
     LEGACY_DECODE_TPOT_FIELD,
+    DECODE_PEAK_WINDOW_FIELD,
+    DECODE_PEAK_WINDOW_TPOT_FIELD,
     "decode_window_p50_throughput",
     "decode_peak_active_tpot_p50_ms",
     "torchtpu_vllm_revision",
@@ -233,9 +237,9 @@ def decode_metrics(
     summary: dict[str, Any],
     benchmark_config: str,
     decode_summary: dict[str, Any] | None = None,
-) -> tuple[float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None]:
     if benchmark_config != "dp8":
-        return None, None
+        return None, None, None, None
 
     decode = (
         decode_summary
@@ -243,13 +247,27 @@ def decode_metrics(
         else summary.get("decode_sliding_window")
     )
     if not isinstance(decode, dict):
-        return None, None
+        return None, None, None, None
 
     aggregate = decode.get("aggregate")
     if not isinstance(aggregate, dict):
-        return None, None
+        return None, None, None, None
+    peak_window = aggregate.get("throughput_peak_window_tok_s")
+    peak_window_tpot = aggregate.get("tpot_peak_window_p50_ms")
     throughput = aggregate.get("throughput_peak_active_p50_tok_s")
     peak_active_tpot = aggregate.get("tpot_peak_active_p50_ms")
+    peak_window_throughput = optional_finite_float(
+        peak_window.get("avg") if isinstance(peak_window, dict) else None,
+        DECODE_PEAK_WINDOW_FIELD,
+    )
+    peak_window_tpot_p50_ms = optional_finite_float(
+        (
+            peak_window_tpot.get("avg")
+            if isinstance(peak_window_tpot, dict)
+            else None
+        ),
+        DECODE_PEAK_WINDOW_TPOT_FIELD,
+    )
     window_p50_throughput = optional_finite_float(
         throughput.get("avg") if isinstance(throughput, dict) else None,
         "decode_window_p50_throughput",
@@ -260,7 +278,12 @@ def decode_metrics(
         else None,
         "decode_peak_active_tpot_p50_ms",
     )
-    return window_p50_throughput, peak_active_tpot_p50_ms
+    return (
+        peak_window_throughput,
+        peak_window_tpot_p50_ms,
+        window_p50_throughput,
+        peak_active_tpot_p50_ms,
+    )
 
 
 def prefill_ttft_results(
@@ -425,15 +448,24 @@ def build_record(
             raise ValueError("successful decode requires --decode-summary")
         decode_summary = load_json(decode_summary_path)
         (
+            decode_peak_window_throughput,
+            decode_peak_window_tpot_p50_ms,
             decode_window_p50_throughput,
             decode_peak_active_tpot_p50_ms,
         ) = decode_metrics(summary, benchmark_config, decode_summary)
-        if decode_window_p50_throughput is None:
+        if (
+            decode_peak_window_throughput is None
+            and decode_window_p50_throughput is None
+        ):
             raise ValueError("decode summary does not contain throughput")
     elif decode_status == "failed":
+        decode_peak_window_throughput = -1.0
+        decode_peak_window_tpot_p50_ms = None
         decode_window_p50_throughput = -1.0
         decode_peak_active_tpot_p50_ms = None
     else:
+        decode_peak_window_throughput = None
+        decode_peak_window_tpot_p50_ms = None
         decode_window_p50_throughput = None
         decode_peak_active_tpot_p50_ms = None
 
@@ -567,6 +599,8 @@ def build_record(
         "p99_ttft_ms": p99_ttft_ms,
         LEGACY_DECODE_THROUGHPUT_FIELD: None,
         LEGACY_DECODE_TPOT_FIELD: None,
+        DECODE_PEAK_WINDOW_FIELD: decode_peak_window_throughput,
+        DECODE_PEAK_WINDOW_TPOT_FIELD: decode_peak_window_tpot_p50_ms,
         "decode_window_p50_throughput": decode_window_p50_throughput,
         "decode_peak_active_tpot_p50_ms": decode_peak_active_tpot_p50_ms,
         "prefill_ttft_status": ttft_status,
@@ -598,7 +632,7 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         return []
     history = load_json(path)
     schema_version = history.get("schema_version")
-    if schema_version not in (1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION):
+    if schema_version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION):
         raise ValueError(f"unsupported history schema in {path}")
     runs = history.get("runs")
     if not isinstance(runs, list):
@@ -634,6 +668,14 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         )
         run.pop("decode_peak_output_throughput", None)
         run.pop("decode_min_tpot_ms", None)
+        run[DECODE_PEAK_WINDOW_FIELD] = optional_finite_float(
+            run.get(DECODE_PEAK_WINDOW_FIELD),
+            DECODE_PEAK_WINDOW_FIELD,
+        )
+        run[DECODE_PEAK_WINDOW_TPOT_FIELD] = optional_finite_float(
+            run.get(DECODE_PEAK_WINDOW_TPOT_FIELD),
+            DECODE_PEAK_WINDOW_TPOT_FIELD,
+        )
         run["decode_window_p50_throughput"] = optional_finite_float(
             run.get("decode_window_p50_throughput"),
             "decode_window_p50_throughput",
@@ -645,11 +687,13 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         decode_status = str(run.get("decode_status") or "").strip().lower()
         if decode_status not in {"success", "failed", "not-run"}:
             decode_throughput = run.get("decode_window_p50_throughput")
+            decode_peak_throughput = run.get(DECODE_PEAK_WINDOW_FIELD)
             legacy_decode_throughput = run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
-            if decode_throughput == -1:
+            if decode_peak_throughput == -1 or decode_throughput == -1:
                 decode_status = "failed"
             elif (
-                decode_throughput is not None
+                decode_peak_throughput is not None
+                or decode_throughput is not None
                 or legacy_decode_throughput is not None
             ):
                 decode_status = "success"
@@ -712,6 +756,8 @@ def update_history(
         decode_fields = (
             LEGACY_DECODE_THROUGHPUT_FIELD,
             LEGACY_DECODE_TPOT_FIELD,
+            DECODE_PEAK_WINDOW_FIELD,
+            DECODE_PEAK_WINDOW_TPOT_FIELD,
             "decode_window_p50_throughput",
             "decode_peak_active_tpot_p50_ms",
             "decode_parallelism",
@@ -1034,50 +1080,64 @@ def decode_history_chart_data(
         and run.get("decode_status", "success") == "success"
         and (
             run.get(LEGACY_DECODE_THROUGHPUT_FIELD) is not None
+            or run.get(DECODE_PEAK_WINDOW_FIELD) is not None
             or run.get("decode_window_p50_throughput") is not None
         )
     ]
     run_ids = [str(run["run_id"]) for run in decode_runs]
     index_by_run_id = {run_id: index for index, run_id in enumerate(run_ids)}
     x_labels = [display_time(run["completed_at"])[5:] for run in decode_runs]
-    metric_series = (
-        (
-            "legacy",
-            "Legacy decode peak output",
-            "#dc6803",
-            LEGACY_DECODE_THROUGHPUT_FIELD,
-        ),
-        (
-            "peak-active-p50",
-            "DP4/TP2 C256 peak-active window P50",
-            "#039855",
-            "decode_window_p50_throughput",
-        ),
-    )
     series = []
-    for config, label, color, field in metric_series:
-        points = [
+    legacy_points = [
+        {
+            "x_index": index_by_run_id[str(run["run_id"])],
+            "value": run[LEGACY_DECODE_THROUGHPUT_FIELD],
+            "tooltip": (
+                f"Legacy decode peak output · {run['run_id']}: "
+                f"{run[LEGACY_DECODE_THROUGHPUT_FIELD]:,.2f} tok/s"
+            ),
+        }
+        for run in decode_runs
+        if run.get(LEGACY_DECODE_THROUGHPUT_FIELD) is not None
+    ]
+    if legacy_points:
+        series.append(
+            {
+                "config": "legacy",
+                "label": "Legacy decode peak output",
+                "color": "#dc6803",
+                "points": legacy_points,
+            }
+        )
+
+    reported_peak_points = []
+    for run in decode_runs:
+        value = run.get(DECODE_PEAK_WINDOW_FIELD)
+        protocol = "peak 1s (>=90% active)"
+        if value is None:
+            value = run.get("decode_window_p50_throughput")
+            protocol = "peak-active window P50 (legacy record)"
+        if value is None:
+            continue
+        reported_peak_points.append(
             {
                 "x_index": index_by_run_id[str(run["run_id"])],
-                "value": run[field],
+                "value": value,
                 "tooltip": (
-                    f"{CURRENT_DECODE_PARALLELISM} "
-                    f"{label} · {run['run_id']}: "
-                    f"{run[field]:,.2f} tok/s"
+                    f"{CURRENT_DECODE_PARALLELISM} C256 {protocol} · "
+                    f"{run['run_id']}: {value:,.2f} tok/s"
                 ),
             }
-            for run in decode_runs
-            if run.get(field) is not None
-        ]
-        if points:
-            series.append(
-                {
-                    "config": config,
-                    "label": label,
-                    "color": color,
-                    "points": points,
-                }
-            )
+        )
+    if reported_peak_points:
+        series.append(
+            {
+                "config": "reported-peak",
+                "label": "DP4/TP2 C256 reported peak",
+                "color": "#039855",
+                "points": reported_peak_points,
+            }
+        )
     return series, x_labels
 
 
@@ -1218,6 +1278,10 @@ def latest_run_payload(run: dict[str, Any]) -> dict[str, Any]:
             LEGACY_DECODE_THROUGHPUT_FIELD
         ),
         LEGACY_DECODE_TPOT_FIELD: run.get(LEGACY_DECODE_TPOT_FIELD),
+        DECODE_PEAK_WINDOW_FIELD: run.get(DECODE_PEAK_WINDOW_FIELD),
+        DECODE_PEAK_WINDOW_TPOT_FIELD: run.get(
+            DECODE_PEAK_WINDOW_TPOT_FIELD
+        ),
         "decode_window_p50_throughput": run.get(
             "decode_window_p50_throughput"
         ),
@@ -1244,6 +1308,10 @@ def latest_decode_payload(run: dict[str, Any] | None) -> dict[str, Any] | None:
         "completed_at": run["completed_at"],
         "machine_ip": run["machine_ip"],
         "model": run["model"],
+        DECODE_PEAK_WINDOW_FIELD: run.get(DECODE_PEAK_WINDOW_FIELD),
+        DECODE_PEAK_WINDOW_TPOT_FIELD: run.get(
+            DECODE_PEAK_WINDOW_TPOT_FIELD
+        ),
         "decode_window_p50_throughput": run.get(
             "decode_window_p50_throughput"
         ),
@@ -1487,15 +1555,35 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
         pcp_prefill = (
             pcp_run.get("best_total_token_throughput") if pcp_run else None
         )
-        dp_decode = (
+        dp_decode_peak = (
+            decode_run.get(DECODE_PEAK_WINDOW_FIELD)
+            if decode_run
+            else None
+        )
+        dp_decode_diagnostic = (
             decode_run.get("decode_window_p50_throughput")
             if decode_run
             else None
         )
-        dp_tpot_p50 = (
+        dp_decode = (
+            dp_decode_peak
+            if dp_decode_peak is not None
+            else dp_decode_diagnostic
+        )
+        dp_peak_tpot_p50 = (
+            decode_run.get(DECODE_PEAK_WINDOW_TPOT_FIELD)
+            if decode_run
+            else None
+        )
+        dp_diagnostic_tpot_p50 = (
             decode_run.get("decode_peak_active_tpot_p50_ms")
             if decode_run
             else None
+        )
+        dp_tpot_p50 = (
+            dp_peak_tpot_p50
+            if dp_decode_peak is not None
+            else dp_diagnostic_tpot_p50
         )
         legacy_dp_decode = (
             decode_run.get(LEGACY_DECODE_THROUGHPUT_FIELD)
@@ -1514,7 +1602,12 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             dp_decode = -1.0
             dp_tpot_p50 = None
             decode_protocol = "failed"
-        elif dp_decode is not None:
+        elif dp_decode_peak is not None:
+            decode_protocol = (
+                f"{CURRENT_DECODE_PARALLELISM} "
+                "C256 peak 1s (>=90% active)"
+            )
+        elif dp_decode_diagnostic is not None:
             decode_protocol = (
                 f"{CURRENT_DECODE_PARALLELISM} "
                 "C256 peak-active P50"
@@ -1607,7 +1700,10 @@ def render_readme_block(runs: list[dict[str, Any]], table_limit: int) -> str:
             "chart uses concurrency 1, runs requests serially, and plots median "
             "latency to the first generated token across the completed samples. "
             "The decode chart and decode table columns show DP4/TP2/EP8 "
-            "measurements only. Historical DP8/TP1 decode records remain in "
+            "measurements only. New decode reports use the highest 1-second "
+            "window with at least 90% of submitted requests continuously "
+            "active; peak-active window P50 remains available as a scheduling "
+            "diagnostic. Historical DP8/TP1 decode records remain in "
             "the JSON/CSV history for traceability; see "
             "[`reports/latest.json`](reports/latest.json) for the newest peaks and "
             "[`reports/throughput_history.json`](reports/throughput_history.json) "
@@ -1746,8 +1842,11 @@ def main() -> None:
             f"last {decode_run_count} runs"
         )
         decode_history_description = (
-            "DP4/TP2/EP8 C256 peak-active window P50 throughput. Historical "
-            "DP8/TP1 decode measurements are excluded from this chart."
+            "DP4/TP2/EP8 C256 peak 1-second throughput with at least 90% of "
+            "submitted requests continuously active. Older records fall back "
+            "to peak-active window P50, which remains in JSON/CSV as a "
+            "diagnostic. Historical DP8/TP1 decode measurements are excluded "
+            "from this chart."
         )
         if decode_history_series:
             decode_history_svg = chart_svg(

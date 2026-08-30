@@ -110,7 +110,7 @@ class UpdateReportTest(unittest.TestCase):
         self.assertIn("| -1.00 | — | — | — | — |", block)
 
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
-        self.assertEqual(latest["schema_version"], 9)
+        self.assertEqual(latest["schema_version"], 10)
         self.assertEqual(latest["benchmarks"]["dp8"]["status"], "failed")
         self.assertEqual(
             latest["benchmarks"]["dp8"]["total_token_throughput"],
@@ -139,6 +139,10 @@ class UpdateReportTest(unittest.TestCase):
                 json.dumps(
                     {
                         "aggregate": {
+                            "throughput_peak_window_tok_s": {
+                                "avg": 6400.0
+                            },
+                            "tpot_peak_window_p50_ms": {"avg": 40.8},
                             "throughput_peak_active_p50_tok_s": {
                                 "avg": 3900.0
                             },
@@ -165,15 +169,25 @@ class UpdateReportTest(unittest.TestCase):
 
         self.assertIsNone(record["best_total_token_throughput"])
         self.assertEqual(record["decode_parallelism"], "DP4/TP2/EP8")
+        self.assertEqual(record["decode_peak_1s_throughput"], 6400.0)
+        self.assertEqual(record["decode_peak_1s_tpot_p50_ms"], 40.8)
         self.assertEqual(record["decode_window_p50_throughput"], 3900.0)
         self.assertEqual(record["decode_peak_active_tpot_p50_ms"], 47.0)
         block = UPDATE_REPORT.render_readme_block([record], table_limit=10)
         self.assertIn("Recent DP4/TP2 decode throughput", block)
         self.assertIn("DP4/TP2 decode tok/s", block)
-        self.assertIn("DP4/TP2/EP8 C256 peak-active P50", block)
+        self.assertIn(
+            "DP4/TP2/EP8 C256 peak 1s (>=90% active)", block
+        )
         latest = json.loads(UPDATE_REPORT.render_latest_json([record]))
         self.assertEqual(latest["prefill_benchmarks"], {})
         self.assertEqual(latest["decode"]["run_id"], "decode-only")
+        self.assertEqual(
+            latest["decode"]["decode_peak_1s_throughput"], 6400.0
+        )
+        self.assertEqual(
+            latest["decode"]["decode_peak_1s_tpot_p50_ms"], 40.8
+        )
         self.assertEqual(
             latest["decode"]["decode_window_p50_throughput"], 3900.0
         )
@@ -284,7 +298,7 @@ class UpdateReportTest(unittest.TestCase):
         self.assertEqual(labels, ["07-24 18:00", "07-25 18:00"])
         self.assertEqual(
             [item["config"] for item in series],
-            ["legacy", "peak-active-p50"],
+            ["legacy", "reported-peak"],
         )
         self.assertEqual(
             [point["value"] for point in series[0]["points"]],

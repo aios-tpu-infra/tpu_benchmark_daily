@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import json
 import math
@@ -23,6 +24,11 @@ AGGREGATE_FIELDS = (
     "peak_active_windows",
     "end_to_end_tok_s",
     "first_token_skew_s",
+    "throughput_peak_window_tok_s",
+    "peak_window_active_requests",
+    "tpot_peak_window_p50_ms",
+    "tpot_peak_window_p90_ms",
+    "tpot_peak_window_p99_ms",
     "throughput_peak_active_p50_tok_s",
     "tpot_peak_active_p50_ms",
     "tpot_peak_active_p90_ms",
@@ -66,6 +72,121 @@ def nested_metric(
         raise ValueError(f"{summary_path}: {group} must be an object")
     return finite_number(
         values.get(metric), f"{group}.{metric}", summary_path
+    )
+
+
+def replay_peak_window(
+    summary_path: Path,
+    benchmark: dict[str, Any],
+) -> tuple[float, int, dict[str, float]]:
+    """Recover the qualified peak window for pre-schema-8 raw results."""
+    raw_path = summary_path.parent / "raw_requests.jsonl"
+    if not raw_path.is_file():
+        raise ValueError(f"{summary_path}: missing {raw_path.name}")
+    records = [
+        json.loads(line)
+        for line in raw_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    concurrency = integer(
+        benchmark.get("concurrency"), "benchmark.concurrency", summary_path
+    )
+    if len(records) != concurrency:
+        raise ValueError(
+            f"{raw_path}: expected {concurrency} request records, "
+            f"got {len(records)}"
+        )
+    window_s = finite_number(
+        benchmark.get("window_s", 1.0), "benchmark.window_s", summary_path
+    )
+    step_s = finite_number(
+        benchmark.get("step_s", 0.1), "benchmark.step_s", summary_path
+    )
+    min_active_fraction = finite_number(
+        benchmark.get("min_peak_active_fraction", 0.9),
+        "benchmark.min_peak_active_fraction",
+        summary_path,
+    )
+    if not 0 < min_active_fraction <= 1:
+        raise ValueError(
+            f"{summary_path}: benchmark.min_peak_active_fraction must be "
+            "in (0, 1]"
+        )
+
+    token_times_by_request: list[list[float]] = []
+    for record in records:
+        values = record.get("token_times_after_batch_start_s")
+        if not isinstance(values, list) or len(values) < 2:
+            raise ValueError(f"{raw_path}: request has fewer than two tokens")
+        token_times_by_request.append(
+            [
+                finite_number(value, "raw token timestamp", raw_path)
+                for value in values
+            ]
+        )
+    decode_intervals = [
+        (token_times[1], token_times[-1])
+        for token_times in token_times_by_request
+    ]
+    all_token_times = sorted(
+        timestamp
+        for token_times in token_times_by_request
+        for timestamp in token_times
+    )
+    minimum_active = math.ceil(concurrency * min_active_fraction)
+    cursor_s = min(start_s for start_s, _ in decode_intervals)
+    scan_end_s = max(end_s for _, end_s in decode_intervals)
+    best_throughput: float | None = None
+    best_active = 0
+    best_start_s: float | None = None
+    while cursor_s + window_s <= scan_end_s + 1e-9:
+        end_s = cursor_s + window_s
+        active_requests = sum(
+            interval_start_s <= cursor_s and interval_end_s >= end_s
+            for interval_start_s, interval_end_s in decode_intervals
+        )
+        if active_requests >= minimum_active:
+            token_count = (
+                bisect.bisect_left(all_token_times, end_s)
+                - bisect.bisect_left(all_token_times, cursor_s)
+            )
+            throughput = token_count / window_s
+            if best_throughput is None or throughput > best_throughput:
+                best_throughput = throughput
+                best_active = active_requests
+                best_start_s = cursor_s
+        cursor_s += step_s
+    if best_throughput is None or best_start_s is None:
+        raise ValueError(
+            f"{raw_path}: no peak window reached {minimum_active}/"
+            f"{concurrency} active requests"
+        )
+    best_end_s = best_start_s + window_s
+    itls_ms = [
+        (current_s - previous_s) * 1000
+        for token_times in token_times_by_request
+        for previous_s, current_s in zip(token_times, token_times[1:])
+        if best_start_s <= current_s < best_end_s
+    ]
+    if not itls_ms:
+        raise ValueError(f"{raw_path}: peak window contains no token intervals")
+
+    def nearest_rank_percentile(percent: float) -> float:
+        ordered = sorted(itls_ms)
+        index = min(
+            len(ordered) - 1,
+            math.ceil(percent / 100 * len(ordered)) - 1,
+        )
+        return ordered[index]
+
+    return (
+        best_throughput,
+        best_active,
+        {
+            "p50": nearest_rank_percentile(50),
+            "p90": nearest_rank_percentile(90),
+            "p99": nearest_rank_percentile(99),
+        },
     )
 
 
@@ -128,6 +249,20 @@ def load_run(summary_path: Path, run_index: int) -> dict[str, Any]:
     if window_count <= 0:
         raise ValueError(f"{summary_path}: window_count must be positive")
 
+    peak_window_throughput = result.get("peak_window_throughput_tok_s")
+    peak_window_active = result.get("peak_window_active_requests")
+    peak_window_tpot = result.get("peak_window_tpot_ms")
+    if (
+        peak_window_throughput is None
+        or peak_window_active is None
+        or not isinstance(peak_window_tpot, dict)
+    ):
+        (
+            peak_window_throughput,
+            peak_window_active,
+            peak_window_tpot,
+        ) = replay_peak_window(summary_path, benchmark)
+
     return {
         "run": run_index,
         "ok_requests": successful_requests,
@@ -145,6 +280,31 @@ def load_run(summary_path: Path, run_index: int) -> dict[str, Any]:
         "first_token_skew_s": finite_number(
             result.get("first_token_skew_s"),
             "first_token_skew_s",
+            summary_path,
+        ),
+        "throughput_peak_window_tok_s": finite_number(
+            peak_window_throughput,
+            "peak_window_throughput_tok_s",
+            summary_path,
+        ),
+        "peak_window_active_requests": integer(
+            peak_window_active,
+            "peak_window_active_requests",
+            summary_path,
+        ),
+        "tpot_peak_window_p50_ms": finite_number(
+            peak_window_tpot.get("p50"),
+            "peak_window_tpot_ms.p50",
+            summary_path,
+        ),
+        "tpot_peak_window_p90_ms": finite_number(
+            peak_window_tpot.get("p90"),
+            "peak_window_tpot_ms.p90",
+            summary_path,
+        ),
+        "tpot_peak_window_p99_ms": finite_number(
+            peak_window_tpot.get("p99"),
+            "peak_window_tpot_ms.p99",
             summary_path,
         ),
         "throughput_peak_active_p50_tok_s": nested_metric(
@@ -218,7 +378,9 @@ def aggregate_result_root(result_root: Path, runs: int) -> dict[str, Any]:
         "protocol": (
             f"DP4/TP2 C256/P65536/D1024; {client_processes}; "
             "distinct prompt and cache_salt per request; request_id % 4 "
-            "DP-rank routing; no admission barrier"
+            "DP-rank routing; no admission barrier; reported peak is the "
+            "highest 1s window with >=90% submitted requests continuously "
+            "active"
         ),
         "statistics": {
             "stddev": "sample",

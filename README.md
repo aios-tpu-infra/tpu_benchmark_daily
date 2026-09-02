@@ -92,7 +92,7 @@ Full machine-readable history is stored in [`reports/speed_bench_history.json`](
 - `models/`: offline model metadata and locally provisioned checkpoint weights;
   checkpoint files are excluded from Git.
 - `scripts/start_dp_decode_server.sh`: starts the real-weight TP2/DP4/EP8
-  C256 decode service with unified pool, block size 2304, GMU 0.95, BF16 SSM,
+  C256 decode service with unified pool, block size 2304, GMU 0.95, FP32 SSM,
   long-context seq-on-lane RPA, owner-output MoE, prefix cache disabled, and the
   same compile shapes as the validated standalone C256 test；服务由
   `vllm-service-launch` 以 `role=decode` 托管。

@@ -357,11 +357,38 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("--data-parallel-size 4", script)
         self.assertIn("--data-parallel-size-local 4", script)
         self.assertIn('--mamba-ssm-cache-dtype "$MAMBA_SSM_CACHE_DTYPE"', script)
+        self.assertIn(
+            'MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-float32}"',
+            script,
+        )
+        self.assertIn("bfloat16|float32", script)
         self.assertIn("export USE_BATCHED_RPA_SEQ_ON_LANE=1", script)
         self.assertIn("export TPU_MOE_OWNER_OUTPUT_MODE", script)
         self.assertIn("--no-enable-prefix-caching", script)
         self.assertIn("SHARED_MODEL_DIR=", script)
         self.assertIn("local model weights are incomplete", script)
+
+    def test_decode_server_accepts_bfloat16_ssm_override(self) -> None:
+        result = self.run_script(
+            "start_dp_decode_server.sh",
+            "--test-only",
+            environment={"MAMBA_SSM_CACHE_DTYPE": "bfloat16"},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_decode_server_rejects_unknown_ssm_dtype(self) -> None:
+        result = self.run_script(
+            "start_dp_decode_server.sh",
+            "--test-only",
+            environment={"MAMBA_SSM_CACHE_DTYPE": "float16"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "MAMBA_SSM_CACHE_DTYPE must be bfloat16 or float32",
+            result.stderr,
+        )
 
     def test_throughput_test_only_accepts_flag_before_run_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

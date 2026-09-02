@@ -53,8 +53,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"
 BLOCK_SIZE="${BLOCK_SIZE:-2304}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,64,72,4096}"
-MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-bfloat16}"
-TPU_GDN_BF16_STATE_IO_MODE="${TPU_GDN_BF16_STATE_IO_MODE:-u32_128_fused_global_halves_initialized_decode}"
+MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-float32}"
 RAGGED_GATHER_REDUCE_VERSION="${RAGGED_GATHER_REDUCE_VERSION:-v2}"
 TPU_MOE_OWNER_OUTPUT_MODE="${TPU_MOE_OWNER_OUTPUT_MODE:-on}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
@@ -110,17 +109,6 @@ case "$MAMBA_SSM_CACHE_DTYPE" in
     exit 2
     ;;
 esac
-case "$TPU_GDN_BF16_STATE_IO_MODE" in
-  legacy|u32_128_fused_global_halves_initialized_decode) ;;
-  *)
-    echo "ERROR: TPU_GDN_BF16_STATE_IO_MODE has unsupported value '$TPU_GDN_BF16_STATE_IO_MODE'." >&2
-    exit 2
-    ;;
-esac
-if [[ "$TPU_GDN_BF16_STATE_IO_MODE" != legacy && "$MAMBA_SSM_CACHE_DTYPE" != bfloat16 ]]; then
-  echo "ERROR: optimized GDN state I/O requires MAMBA_SSM_CACHE_DTYPE=bfloat16." >&2
-  exit 2
-fi
 case "${TPU_PARALLEL_PRECOMPILE,,}" in
   1|true) TPU_PARALLEL_PRECOMPILE=1 ;;
   0|false) TPU_PARALLEL_PRECOMPILE=0 ;;
@@ -172,7 +160,6 @@ CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_c256_dp4_tp2"
 CACHE_KEY+="_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}"
 CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
 CACHE_KEY+="_ssm${MAMBA_SSM_CACHE_DTYPE}"
-CACHE_KEY+="_gdnio${TPU_GDN_BF16_STATE_IO_MODE}"
 CACHE_KEY+="_rpalongctx_seq_lane_owner${TPU_MOE_OWNER_OUTPUT_MODE}_noprefix"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
 
@@ -208,7 +195,6 @@ unset USE_BATCHED_RPA_KERNEL
 export USE_BATCHED_RPA_LONGCTX=1
 export USE_BATCHED_RPA_SEQ_ON_LANE=1
 export RAGGED_GATED_DELTA_RULE_IMPL=chunked_kernel_v3_pd
-export TPU_GDN_BF16_STATE_IO_MODE
 
 export USE_MOE_SPARSE_CORE=1
 export RAGGED_GATHER_VERSION=v2
@@ -338,8 +324,7 @@ echo "torch_tpu version:       $TORCH_TPU_VERSION"
 echo "benchmark config:        dp4_tp2_decode_c256"
 echo "parallelism:             TP=2, DP=4, EP=8"
 echo "KV block size:           $BLOCK_SIZE (explicit)"
-echo "GDN SSM cache dtype:     $MAMBA_SSM_CACHE_DTYPE"
-echo "GDN BF16 state I/O:      $TPU_GDN_BF16_STATE_IO_MODE"
+echo "Mamba SSM cache dtype:   $MAMBA_SSM_CACHE_DTYPE"
 echo "prefix caching:          disabled"
 echo "batched RPA:             longctx + seq_on_lane"
 echo "ragged gather-reduce:    $RAGGED_GATHER_REDUCE_VERSION"

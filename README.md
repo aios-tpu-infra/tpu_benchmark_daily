@@ -46,16 +46,16 @@ Latest PCP8 single-request TTFT: **success**, **serial samples/length: 8K/16K/32
 
 | vllm-torchtpu commit | Test time (UTC) | DP peak prefill tok/s | PCP peak prefill tok/s | DP4/TP2 decode tok/s | DP4/TP2 decode TPOT (ms) | Decode protocol | DP TTFT 8K (ms) | PCP TTFT 8K (ms) | DP TTFT 16K (ms) | PCP TTFT 16K (ms) | DP TTFT 32K (ms) | PCP TTFT 32K (ms) | DP TTFT 64K (ms) | PCP TTFT 64K (ms) | DP TTFT 128K (ms) | PCP TTFT 128K (ms) | DP TTFT 252K (ms) | PCP TTFT 252K (ms) |
 | --- | --- | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `896a56ad7568` | 2026-09-01 14:38 | 72,407.54 | 54,356.74 | 5,199.20 | 41.52 | C256 peak-active P50 | 1,026.75 | 227.64 | 2,116.01 | 430.26 | 4,505.95 | 842.29 | 10,088.05 | 1,818.13 | 24,512.55 | 4,169.80 | 64,840.60 | 10,149.86 |
-| `0be027b92557` | 2026-08-26 11:33 | 57,682.03 | 54,330.21 | 5,162.40 | 41.76 | C256 peak-active P50 | 1,004.77 | 217.92 | 2,073.45 | 408.26 | 4,402.55 | 802.85 | 9,910.08 | 1,722.84 | 24,144.02 | 3,984.30 | 64,042.64 | 9,806.97 |
+| `7324a1e97bca` | 2026-09-02 10:05 | — | — | 769.00 | 343.28 | DP4/TP2/EP8 C256 peak 1s (>=90% active) | — | — | — | — | — | — | — | — | — | — | — | — |
+| `7324a1e97bca` | 2026-09-02 10:03 | — | — | -1.00 | — | failed | — | — | — | — | — | — | — | — | — | — | — | — |
+| `896a56ad7568` | 2026-09-01 14:38 | 72,407.54 | 54,356.74 | — | — | — | 1,026.75 | 227.64 | 2,116.01 | 430.26 | 4,505.95 | 842.29 | 10,088.05 | 1,818.13 | 24,512.55 | 4,169.80 | 64,840.60 | 10,149.86 |
+| `0be027b92557` | 2026-08-26 11:33 | 57,682.03 | 54,330.21 | — | — | — | 1,004.77 | 217.92 | 2,073.45 | 408.26 | 4,402.55 | 802.85 | 9,910.08 | 1,722.84 | 24,144.02 | 3,984.30 | 64,042.64 | 9,806.97 |
 | `ec384c75cfe5` | 2026-08-22 04:25 | — | 54,339.94 | — | — | — | — | 215.91 | — | 411.15 | — | 796.34 | — | 1,732.30 | — | 3,980.49 | — | 9,794.71 |
 | `26a36b23a12d` | 2026-08-22 04:21 | — | -1.00 | — | — | — | — | failed | — | failed | — | failed | — | failed | — | failed | — | failed |
 | `99a73108f7a9` | 2026-08-22 03:22 | 57,676.65 | — | — | — | — | 1,002.49 | — | 2,066.35 | — | 4,397.81 | — | 9,882.86 | — | 24,094.43 | — | 64,055.86 | — |
 | `99a73108f7a9` | 2026-08-22 02:35 | 54,716.87 | — | — | — | — | 988.32 | — | 2,029.10 | — | 4,339.75 | — | 9,763.50 | — | 23,849.41 | — | 63,643.05 | — |
 | `99a73108f7a9` | 2026-08-22 02:03 | — | 52,057.24 | — | — | — | — | 220.03 | — | 408.69 | — | 828.40 | — | 1,774.61 | — | 4,116.95 | — | 9,995.70 |
 | `99a73108f7a9` | 2026-08-21 23:33 | — | 52,062.06 | — | — | — | — | 220.87 | — | 406.67 | — | 822.04 | — | 1,775.28 | — | 4,068.46 | — | 9,987.12 |
-| `017b87e7fe02` | 2026-08-21 23:22 | — | -1.00 | — | — | — | — | failed | — | failed | — | failed | — | failed | — | failed | — | failed |
-| `77dd6ade7448` | 2026-08-21 14:15 | 57,348.33 | 50,252.38 | 4,864.90 | 42.69 | C256 peak-active P50 | 1,007.81 | 229.05 | 2,086.93 | 426.78 | 4,422.12 | 890.30 | 9,941.75 | 1,940.06 | 24,228.15 | 4,209.24 | 64,279.58 | 10,284.50 |
 
 Failed benchmark groups are recorded as -1 tok/s in the table and JSON/CSV reports, while charts plot successful measurements only. The prefill charts compare DP8 and PCP8 throughput and track their recent peaks. The combined history table records each run's throughput and per-length median TTFT; missing measurements are shown as — and failed lengths as failed. The single-request TTFT chart uses concurrency 1, runs requests serially, and plots median latency to the first generated token across the completed samples. The decode chart and decode table columns show DP4/TP2/EP8 measurements only. New decode reports use the highest 1-second window with at least 90% of submitted requests continuously active; peak-active window P50 remains available as a scheduling diagnostic. Historical DP8/TP1 decode records remain in the JSON/CSV history for traceability; see [`reports/latest.json`](reports/latest.json) for the newest peaks and [`reports/throughput_history.json`](reports/throughput_history.json) for the full history.
 <!-- BENCHMARK_REPORT_END -->

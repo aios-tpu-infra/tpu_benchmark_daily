@@ -2,6 +2,8 @@
 
 set -Eeuo pipefail
 
+export TPU_SKIP_MDS_QUERY="true"
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 STATE_DIR="${STATE_DIR:-$PROJECT_ROOT/.state}"

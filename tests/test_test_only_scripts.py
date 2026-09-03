@@ -90,25 +90,27 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("compile sizes:           512,1024,2048,4096", pcp.stdout)
         self.assertIn("skip padded MoE tokens:  0", pcp.stdout)
         self.assertIn("MoE collection chunk size: 16384", pcp.stdout)
-        self.assertIn("fused EP MoE kernel:      0", pcp.stdout)
-        self.assertIn("sharded routing plan:     0", pcp.stdout)
+        self.assertIn("fused EP MoE kernel:      1", pcp.stdout)
+        self.assertIn("sharded routing plan:     1", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 
-    def test_dp_prefill_supports_fused_ep_moe_overrides(self) -> None:
-        result = self.run_script(
-            "start_prefill_server.sh",
-            "--config",
-            "dp8",
-            "--test-only",
-            environment={
-                "USE_MOE_FUSED_EP_KERNEL": "false",
-                "MOE_FUSED_EP_V2_SHARDED_PLAN": "false",
-            },
-        )
+    def test_prefill_supports_fused_ep_moe_overrides(self) -> None:
+        for config in ("dp8", "pcp8"):
+            with self.subTest(config=config):
+                result = self.run_script(
+                    "start_prefill_server.sh",
+                    "--config",
+                    config,
+                    "--test-only",
+                    environment={
+                        "USE_MOE_FUSED_EP_KERNEL": "false",
+                        "MOE_FUSED_EP_V2_SHARDED_PLAN": "false",
+                    },
+                )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("fused EP MoE kernel:      0", result.stdout)
-        self.assertIn("sharded routing plan:     0", result.stdout)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("fused EP MoE kernel:      0", result.stdout)
+                self.assertIn("sharded routing plan:     0", result.stdout)
 
     def test_prefill_server_validates_fused_ep_moe_settings(self) -> None:
         for name in (

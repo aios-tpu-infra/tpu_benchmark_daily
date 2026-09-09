@@ -165,7 +165,7 @@ CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_c256_dp4_tp2"
 CACHE_KEY+="_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}"
 CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
 CACHE_KEY+="_ssm${MAMBA_SSM_CACHE_DTYPE}"
-CACHE_KEY+="_rpalongctx_seq_lane_owner${TPU_MOE_OWNER_OUTPUT_MODE}_noprefix"
+CACHE_KEY+="_rpalongctx_hnd_owner${TPU_MOE_OWNER_OUTPUT_MODE}_noprefix"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
 
 export PYTHONPATH="$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
@@ -198,7 +198,7 @@ unset TPU_VLLM_KV_CACHE_ALIAS_FALLBACK
 export TPU_KV_CACHE_HEADROOM_MIB=6144
 unset USE_BATCHED_RPA_KERNEL
 export USE_BATCHED_RPA_LONGCTX=1
-export USE_BATCHED_RPA_SEQ_ON_LANE=1
+export VLLM_KV_CACHE_LAYOUT=HND
 export RAGGED_GATED_DELTA_RULE_IMPL=chunked_kernel_v3_pd
 
 export USE_MOE_SPARSE_CORE=1
@@ -332,7 +332,8 @@ echo "parallelism:             TP=2, DP=4, EP=8"
 echo "KV block size:           $BLOCK_SIZE (explicit)"
 echo "Mamba SSM cache dtype:   $MAMBA_SSM_CACHE_DTYPE"
 echo "prefix caching:          disabled"
-echo "batched RPA:             longctx + seq_on_lane"
+echo "batched RPA:             longctx"
+echo "KV cache layout:         $VLLM_KV_CACHE_LAYOUT (seq_along_lane)"
 echo "ragged gather-reduce:    $RAGGED_GATHER_REDUCE_VERSION"
 echo "MoE owner-output:        $TPU_MOE_OWNER_OUTPUT_MODE"
 echo "MoE indirect GMM1:       $USE_MOE_INDIRECT_GMM1"

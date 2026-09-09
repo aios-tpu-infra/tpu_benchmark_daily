@@ -84,6 +84,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("MoE collection chunk size: 16384", dp.stdout)
         self.assertIn("fused EP MoE kernel:      1", dp.stdout)
         self.assertIn("sharded routing plan:     1", dp.stdout)
+        self.assertIn("KV cache layout:         HND (seq_along_lane)", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           64", pcp.stdout)
@@ -92,6 +93,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("MoE collection chunk size: 16384", pcp.stdout)
         self.assertIn("fused EP MoE kernel:      1", pcp.stdout)
         self.assertIn("sharded routing plan:     1", pcp.stdout)
+        self.assertIn("KV cache layout:         HND (seq_along_lane)", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
 
     def test_prefill_supports_fused_ep_moe_overrides(self) -> None:
@@ -265,6 +267,18 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn('--block-size "$BLOCK_SIZE"', decode_script)
         self.assertNotIn("--block-size", prefill_script)
 
+    def test_all_server_configs_use_hnd_kv_cache_layout(self) -> None:
+        for script_name in (
+            "start_dp_decode_server.sh",
+            "start_prefill_server.sh",
+        ):
+            with self.subTest(script_name=script_name):
+                script = (
+                    PROJECT_ROOT / "scripts" / script_name
+                ).read_text(encoding="utf-8")
+                self.assertIn("export VLLM_KV_CACHE_LAYOUT=HND", script)
+                self.assertNotIn("USE_BATCHED_RPA_SEQ_ON_LANE", script)
+
     def test_all_server_configs_enable_parallel_precompile(self) -> None:
         for script_name in (
             "start_dp_decode_server.sh",
@@ -364,7 +378,6 @@ class TestOnlyScriptsTest(unittest.TestCase):
             script,
         )
         self.assertIn("bfloat16|float32", script)
-        self.assertIn("export USE_BATCHED_RPA_SEQ_ON_LANE=1", script)
         self.assertIn("export TPU_MOE_OWNER_OUTPUT_MODE", script)
         self.assertIn("--no-enable-prefix-caching", script)
         self.assertIn("SHARED_MODEL_DIR=", script)

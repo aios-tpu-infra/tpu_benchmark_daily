@@ -62,6 +62,8 @@ case "$BENCHMARK_CONFIG" in
     TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-16384}"
     USE_MOE_FUSED_EP_KERNEL="${USE_MOE_FUSED_EP_KERNEL:-1}"
     MOE_FUSED_EP_V2_SHARDED_PLAN="${MOE_FUSED_EP_V2_SHARDED_PLAN:-1}"
+    CP_KV_CACHE_INTERLEAVE_SIZE="${CP_KV_CACHE_INTERLEAVE_SIZE:-128}"
+    BLOCK_SIZE="${BLOCK_SIZE:-}"
     ;;
   pcp8)
     CONFIG_LABEL=PCP8
@@ -76,6 +78,10 @@ case "$BENCHMARK_CONFIG" in
     TPU_MOE_COLLECTION_CHUNK_SIZE="${TPU_MOE_COLLECTION_CHUNK_SIZE:-16384}"
     USE_MOE_FUSED_EP_KERNEL="${USE_MOE_FUSED_EP_KERNEL:-1}"
     MOE_FUSED_EP_V2_SHARDED_PLAN="${MOE_FUSED_EP_V2_SHARDED_PLAN:-1}"
+    # A 768-token manager block is split into three 256-token kernel pages.
+    # Keep the interleave equal to that physical PCP page size.
+    CP_KV_CACHE_INTERLEAVE_SIZE=256
+    BLOCK_SIZE=768
     ;;
   *)
     echo "ERROR: --config must be dp8 or pcp8, got '$BENCHMARK_CONFIG'." >&2
@@ -114,6 +120,14 @@ require_uint MAX_MODEL_LEN "$MAX_MODEL_LEN"
 require_uint MAX_NUM_BATCHED_TOKENS "$MAX_NUM_BATCHED_TOKENS"
 require_uint MAX_NUM_SEQS "$MAX_NUM_SEQS"
 require_uint TPU_PREMAPPED_BUFFER_SIZE "$TPU_PREMAPPED_BUFFER_SIZE"
+require_uint CP_KV_CACHE_INTERLEAVE_SIZE "$CP_KV_CACHE_INTERLEAVE_SIZE"
+if [[ -n "$BLOCK_SIZE" ]]; then
+  require_uint BLOCK_SIZE "$BLOCK_SIZE"
+  if (( BLOCK_SIZE % 128 != 0 )); then
+    echo "ERROR: BLOCK_SIZE must be a multiple of 128 for the CUSTOM attention backend, got '$BLOCK_SIZE'." >&2
+    exit 2
+  fi
+fi
 if [[ -n "$LONG_PREFILL_TOKEN_THRESHOLD" ]]; then
   require_uint LONG_PREFILL_TOKEN_THRESHOLD "$LONG_PREFILL_TOKEN_THRESHOLD"
 fi
@@ -171,6 +185,8 @@ if (( TEST_ONLY )); then
   echo "max sequences:           $MAX_NUM_SEQS"
   echo "compile sizes:           $COMPILE_SIZES"
   echo "KV cache layout:         $VLLM_KV_CACHE_LAYOUT (seq_along_lane)"
+  echo "KV cache interleave:     $CP_KV_CACHE_INTERLEAVE_SIZE"
+  echo "KV manager block size:   ${BLOCK_SIZE:-auto-derived}"
   echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"
   echo "premapped buffer size:   $TPU_PREMAPPED_BUFFER_SIZE"
   echo "skip padded MoE tokens:  $TPU_MOE_SKIP_PADDED_TOKENS"
@@ -213,12 +229,13 @@ TORCH_TPU_VERSION=$(
     'from importlib.metadata import version; print(version("torch-tpu"))'
 )
 COMPILE_SIZES_CACHE_KEY=${COMPILE_SIZES//,/-}
+BLOCK_SIZE_CACHE_KEY=${BLOCK_SIZE:-auto}
 case "$BENCHMARK_CONFIG" in
   dp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_kvl${VLLM_KV_CACHE_LAYOUT}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp8_tp1_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_kvl${VLLM_KV_CACHE_LAYOUT}_bs${BLOCK_SIZE_CACHE_KEY}_cpkvi${CP_KV_CACHE_INTERLEAVE_SIZE}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
   pcp8)
-    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_kvl${VLLM_KV_CACHE_LAYOUT}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_cs${COMPILE_SIZES_CACHE_KEY}"
+    CACHE_KEY="${SOURCE_REV}_torch_tpu${TORCH_TPU_VERSION}_dp1_pcp8_mml${MAX_MODEL_LEN}_mnbt${MAX_NUM_BATCHED_TOKENS}_mns${MAX_NUM_SEQS}_kvl${VLLM_KV_CACHE_LAYOUT}_bs${BLOCK_SIZE_CACHE_KEY}_cpkvi${CP_KV_CACHE_INTERLEAVE_SIZE}_lptt${LONG_PREFILL_TOKEN_THRESHOLD}_moeskip${TPU_MOE_SKIP_PADDED_TOKENS}_moecs${TPU_MOE_COLLECTION_CHUNK_SIZE}_fep${USE_MOE_FUSED_EP_KERNEL}_fepsp${MOE_FUSED_EP_V2_SHARDED_PLAN}_cs${COMPILE_SIZES_CACHE_KEY}"
     ;;
 esac
 
@@ -365,6 +382,11 @@ if [[ -n "$PROFILE_DIR" ]]; then
   )
 fi
 
+block_size_args=()
+if [[ -n "$BLOCK_SIZE" ]]; then
+  block_size_args=(--block-size "$BLOCK_SIZE")
+fi
+
 COMPILATION_CONFIG=$(printf \
   '{"backend":"vllm_torchtpu.compilation.tpu_compiler.TpuCompilerAdaptor","compile_sizes":[%s],"inductor_compile_config":{"enable_auto_functionalized_v2":false,"size_asserts":false,"alignment_asserts":false,"scalar_asserts":false}}' \
   "$COMPILE_SIZES")
@@ -383,13 +405,19 @@ echo "benchmark config:        $BENCHMARK_CONFIG"
 echo "parallelism:             DP=$DATA_PARALLEL_SIZE, PCP=$PREFILL_CONTEXT_PARALLEL_SIZE, TP=1"
 echo "compile sizes: $COMPILE_SIZES"
 echo "KV cache layout: $VLLM_KV_CACHE_LAYOUT (seq_along_lane)"
+echo "KV cache interleave: $CP_KV_CACHE_INTERLEAVE_SIZE"
+echo "KV manager block size: ${BLOCK_SIZE:-auto-derived}"
 echo "parallel precompile: $TPU_PARALLEL_PRECOMPILE"
 echo "premapped buffer size: $TPU_PREMAPPED_BUFFER_SIZE"
 echo "compile cache: $COMPILE_CACHE_ROOT ($COMPILE_CACHE_ACTION before startup)"
 echo "legacy TorchInductor cache: $LEGACY_TORCHINDUCTOR_CACHE (cleared before startup)"
 echo "runtime temporary path: $RUNTIME_TMP_ROOT (cleared before startup)"
 echo "TorchTPU Tier-2 cache: disabled (no /dev/shm dependency)"
-echo "unified block pool: enabled (block size auto-derived)"
+if [[ -n "$BLOCK_SIZE" ]]; then
+  echo "unified block pool: enabled (block size floor $BLOCK_SIZE)"
+else
+  echo "unified block pool: enabled (block size auto-derived)"
+fi
 echo "skip padded MoE tokens: $TPU_MOE_SKIP_PADDED_TOKENS"
 echo "MoE collection chunk size: $TPU_MOE_COLLECTION_CHUNK_SIZE"
 echo "fused EP MoE kernel: $USE_MOE_FUSED_EP_KERNEL"
@@ -416,6 +444,7 @@ exec "$VLLM_SERVICE_LAUNCH" start \
   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS" \
   "${long_prefill_args[@]}" \
   --max-num-seqs "$MAX_NUM_SEQS" \
+  "${block_size_args[@]}" \
   --data-parallel-size "$DATA_PARALLEL_SIZE" \
   --attention-backend CUSTOM \
   --gpu-memory-utilization 0.90 \
@@ -425,7 +454,7 @@ exec "$VLLM_SERVICE_LAUNCH" start \
   --disable-custom-all-reduce \
   --no-enable-prefix-caching \
   --prefill-context-parallel-size "$PREFILL_CONTEXT_PARALLEL_SIZE" \
-  --cp-kv-cache-interleave-size 256 \
+  --cp-kv-cache-interleave-size "$CP_KV_CACHE_INTERLEAVE_SIZE" \
   --no-disable-hybrid-kv-cache-manager \
   --tensor-parallel-size 1 \
   --return-tokens-as-token-ids \

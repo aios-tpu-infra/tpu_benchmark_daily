@@ -85,6 +85,8 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("fused EP MoE kernel:      1", dp.stdout)
         self.assertIn("sharded routing plan:     1", dp.stdout)
         self.assertIn("KV cache layout:         HND (seq_along_lane)", dp.stdout)
+        self.assertIn("KV cache interleave:     128", dp.stdout)
+        self.assertIn("KV manager block size:   auto-derived", dp.stdout)
         self.assertNotIn("long prefill threshold", dp.stdout)
         self.assertEqual(pcp.returncode, 0, pcp.stderr)
         self.assertIn("max sequences:           64", pcp.stdout)
@@ -94,7 +96,40 @@ class TestOnlyScriptsTest(unittest.TestCase):
         self.assertIn("fused EP MoE kernel:      1", pcp.stdout)
         self.assertIn("sharded routing plan:     1", pcp.stdout)
         self.assertIn("KV cache layout:         HND (seq_along_lane)", pcp.stdout)
+        self.assertIn("KV cache interleave:     256", pcp.stdout)
+        self.assertIn("KV manager block size:   768", pcp.stdout)
         self.assertIn("long prefill threshold:  32768", pcp.stdout)
+
+    def test_pcp_prefill_kv_geometry_is_fixed(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "pcp8",
+            "--test-only",
+            environment={
+                "CP_KV_CACHE_INTERLEAVE_SIZE": "128",
+                "BLOCK_SIZE": "1024",
+            },
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("KV cache interleave:     256", result.stdout)
+        self.assertIn("KV manager block size:   768", result.stdout)
+
+    def test_prefill_validates_kv_cache_interleave(self) -> None:
+        result = self.run_script(
+            "start_prefill_server.sh",
+            "--config",
+            "dp8",
+            "--test-only",
+            environment={"CP_KV_CACHE_INTERLEAVE_SIZE": "invalid"},
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "CP_KV_CACHE_INTERLEAVE_SIZE must be a positive integer",
+            result.stderr,
+        )
 
     def test_prefill_supports_fused_ep_moe_overrides(self) -> None:
         for config in ("dp8", "pcp8"):
@@ -265,7 +300,7 @@ class TestOnlyScriptsTest(unittest.TestCase):
             PROJECT_ROOT / "scripts" / "start_prefill_server.sh"
         ).read_text(encoding="utf-8")
         self.assertIn('--block-size "$BLOCK_SIZE"', decode_script)
-        self.assertNotIn("--block-size", prefill_script)
+        self.assertIn('--block-size "$BLOCK_SIZE"', prefill_script)
 
     def test_all_server_configs_use_hnd_kv_cache_layout(self) -> None:
         for script_name in (

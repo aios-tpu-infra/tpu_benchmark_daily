@@ -45,7 +45,7 @@ TPU_SKIP_MDS_QUERY=true .venv/bin/python scripts/bench_moe_decode_ut.py \
 6. 对全部 token 计算 gate/up、SiLU、down，然后按路由系数直接累加到 FP32 VMEM 输出；零系数的位置显式屏蔽。
 7. 所有专家完成后，将累加输出转成 BF16，写回 HBM 一次。
 
-单专家 intermediate 和量化后的 intermediate 均复用 VMEM scratch。不创建 `[expert, token, hidden]` 输出，也不把每专家输出写回 HBM。256×4096 的 FP32 累加 tensor 为 4 MiB；包含权重双缓冲、输入/输出、中间结果、量化 scale 等的显式 VMEM 占用约 34.6 MiB，另留编译器临时空间。kernel 配置上限为 60 MiB。
+单专家 intermediate 和量化后的 intermediate 均复用 VMEM scratch。不创建 `[expert, token, hidden]` 输出，也不把每专家输出写回 HBM。256×4096 的 FP32 累加 tensor 为 4 MiB；包含权重双缓冲、输入/输出、中间结果、量化 scale 等的显式 VMEM 占用约 34.6 MiB，另留编译器临时空间。此前测试使用 60 MiB 编译预算；当前已移除固定预算，由编译器判断资源是否足够。
 
 保留 FP8 权重与动态 activation quantization，FP32 MXU dot 结果按原 GMM 路径转 BF16、应用 scale 并累加。最终专家加权累加使用 FP32。FP8/BF16 舍入和融合变化使它与原实现不是逐位相同。
 
@@ -54,11 +54,23 @@ TPU_SKIP_MDS_QUERY=true .venv/bin/python scripts/bench_moe_decode_ut.py \
 新路径只在静态检查通过时选择：
 
 - BF16 hidden，原生 `float8_e4m3fn` 权重；FP32 每输出通道 scale，支持入口归一化后的 `[E,1,1,N]` 布局。
-- SiLU、无 expert bias、无 packed quantization、`skip_padded_tokens=False`。
-- token 数 16–256 且为 16 的倍数；hidden 为 512/1024/2048/4096；expert intermediate 为 512/1024；本地 expert 数 1–64。
-- 硬件每 core VMEM 至少 64 MiB。已在本机 TPU7x 验证。
+- SiLU、无 expert bias、无 packed quantization；`rhs_quant_dtype` 为 `None` 或相同的 FP8 dtype。
+- M/H/I/E 为正；M 是 16 的倍数，H/I 是 512 的倍数。无尺寸白名单和 M/E 上限。
+- `skip_padded_tokens` 两种取值都支持；系数矩阵的专家维向上补齐到 128 的倍数。
+- 不再检查固定 VMEM 容量，不设置固定 60 MiB 预算，由编译器判断资源。
 
-其他形状、dtype、激活、bias、scale 等继续使用原 GMM 路径，包括当前服务的长 prefill 输入。开启该选项不保证每一个调用都选中新 kernel；需要通过日志或 trace 确认。
+由用户仅在 decode 服务上显式设置 `TPU_MOE_DECODE_IMPL=dense_expert`，prefill 服务保持 `standard`。不根据 M 自动推断阶段；去掉 M 上限后，混合服务的长 prefill 不再自动回退。
+未启用开关或功能/对齐不支持时保留原 GMM。选中新实现后，编译资源错误直接传播，没有异常重试 fallback。
+
+## 放宽形状限制的验证
+
+新增 CPU 准入和 Pallas 解释模式验证覆盖 M=272、H/I=1536、E=129，以及专家 127/128、重复/无效 ID、零权重行和显式实现选择。解释模式仅用于测试，不作为运行时分支；资源异常传播测试确认不会重试原 GMM。
+本轮未重新进行 TPU 编译或 E2E 压测，当前运行服务仍加载此前版本。下面的 203 项 TPU 测试及性能结果来自限制放宽前的 `3477a1f`。
+
+```bash
+JAX_PLATFORMS=cpu .venv/bin/python -m pytest -q \
+  third_party/torchtpu-vllm/tests/kernels/test_moe_dense_expert_shapes.py
+```
 
 ## 布局修复与新增验证
 
@@ -95,9 +107,9 @@ pool32 中新融合 kernel 本身为 490.47 μs，外部算子为 104.33 μs。�
 
 ## 测试与产物
 
-**最终相关测试：203 passed**（包含 13 项新 kernel 测试与 190 项原 MoE core 回归测试）；Ruff 和 diff whitespace 检查通过。三组 DP4/TP2 全尺寸 benchmark 校验也均通过。
+**限制放宽前的硬件测试：203 passed**（包含 13 项新 kernel 测试与 190 项原 MoE core 回归测试）；Ruff 和 diff whitespace 检查通过。三组 DP4/TP2 全尺寸 benchmark 校验也均通过。
 
-Kernel 测试覆盖同一公共入口切换、非本地路由、单专家、空 rank、零权重、重复 expert ID，以及不支持的参数和长 prefill 回退。硬件测试命令：
+Kernel 测试覆盖同一公共入口切换、非本地路由、单专家、空 rank、零权重、重复 expert ID，以及不支持的参数和原 M 上限回退；当前测试已改为验证对齐回退。硬件测试命令：
 
 ```bash
 TPU_SKIP_MDS_QUERY=true TPU_MOE_OWNER_OUTPUT_MODE=on \

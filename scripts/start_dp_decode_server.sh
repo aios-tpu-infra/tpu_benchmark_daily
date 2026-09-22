@@ -56,6 +56,7 @@ COMPILE_SIZES="${COMPILE_SIZES:-8,16,32,64,72,4096}"
 MAMBA_SSM_CACHE_DTYPE="${MAMBA_SSM_CACHE_DTYPE:-float32}"
 RAGGED_GATHER_REDUCE_VERSION="${RAGGED_GATHER_REDUCE_VERSION:-v2}"
 TPU_MOE_OWNER_OUTPUT_MODE="${TPU_MOE_OWNER_OUTPUT_MODE:-on}"
+TPU_MOE_DECODE_IMPL="${TPU_MOE_DECODE_IMPL:-dense_expert}"
 USE_MOE_INDIRECT_GMM1="${USE_MOE_INDIRECT_GMM1:-1}"
 VLLM_ENGINE_READY_TIMEOUT_S="${VLLM_ENGINE_READY_TIMEOUT_S:-3600}"
 RESET_COMPILE_CACHE="${RESET_COMPILE_CACHE:-1}"
@@ -101,6 +102,13 @@ case "$TPU_MOE_OWNER_OUTPUT_MODE" in
   *)
     echo "ERROR: TPU_MOE_OWNER_OUTPUT_MODE must be off or on, got '$TPU_MOE_OWNER_OUTPUT_MODE'." >&2
     exit 2
+    ;;
+esac
+case "$TPU_MOE_DECODE_IMPL" in
+  standard|dense_expert) ;;
+  *)
+    echo "ERROR: TPU_MOE_DECODE_IMPL must be standard or dense_expert, got '$TPU_MOE_DECODE_IMPL'." >&2
+    exit 1
     ;;
 esac
 if [[ "$USE_MOE_INDIRECT_GMM1" != 0 && "$USE_MOE_INDIRECT_GMM1" != 1 ]]; then
@@ -167,6 +175,9 @@ CACHE_KEY+="_mns${MAX_NUM_SEQS}_bs${BLOCK_SIZE}_gmu${GPU_MEMORY_UTILIZATION}"
 CACHE_KEY+="_ssm${MAMBA_SSM_CACHE_DTYPE}"
 CACHE_KEY+="_rpalongctx_hnd_owner${TPU_MOE_OWNER_OUTPUT_MODE}_noprefix"
 CACHE_KEY+="_cs${COMPILE_SIZES_CACHE_KEY}"
+if [[ "$TPU_MOE_DECODE_IMPL" != standard ]]; then
+  CACHE_KEY+="_moe${TPU_MOE_DECODE_IMPL}"
+fi
 
 export PYTHONPATH="$TORCHTPU_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
 export HF_HUB_OFFLINE=1
@@ -205,6 +216,7 @@ export USE_MOE_SPARSE_CORE=1
 export RAGGED_GATHER_VERSION=v2
 export RAGGED_GATHER_REDUCE_VERSION
 export TPU_MOE_OWNER_OUTPUT_MODE
+export TPU_MOE_DECODE_IMPL
 export USE_MOE_INDIRECT_GMM1
 export ONEHOT_MOE_PERMUTE_THRESHOLD=32768
 unset TPU_RAGGED_GATHER_REDUCE_IMPL
@@ -336,6 +348,7 @@ echo "batched RPA:             longctx"
 echo "KV cache layout:         $VLLM_KV_CACHE_LAYOUT (seq_along_lane)"
 echo "ragged gather-reduce:    $RAGGED_GATHER_REDUCE_VERSION"
 echo "MoE owner-output:        $TPU_MOE_OWNER_OUTPUT_MODE"
+echo "MoE decode impl:         $TPU_MOE_DECODE_IMPL"
 echo "MoE indirect GMM1:       $USE_MOE_INDIRECT_GMM1"
 echo "compile sizes:           $COMPILE_SIZES"
 echo "parallel precompile:     $TPU_PARALLEL_PRECOMPILE"

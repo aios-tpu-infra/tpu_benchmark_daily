@@ -1,5 +1,7 @@
 # Qwen3.5 decode MoE UT 基线（2026-09-21）
 
+性能 UT 已迁入 `torchtpu-vllm` 分支，可直接使用 [runner](third_party/torchtpu-vllm/scripts/bench_moe_decode_ut.py)、[trace 分析](third_party/torchtpu-vllm/scripts/analyze_moe_ut_trace.py) 和 [配对比较](third_party/torchtpu-vllm/scripts/compare_moe_ut.py)。最新复测和命令见 [设计与性能报告](third_party/torchtpu-vllm/docs/developers_guide/dense_expert_moe.md)。下文保留最初基线记录。
+
 已在 8 个 TPU7x chiplet 上跑通原始 MoE 路径，用于后续“逐专家计算全部 token、直接累加输出”实现的对照。这里只建立基线，没有替换生产 kernel，也没有发布报告。
 
 ## 配置与范围

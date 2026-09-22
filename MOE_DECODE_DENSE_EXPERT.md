@@ -65,12 +65,28 @@ TPU_SKIP_MDS_QUERY=true .venv/bin/python scripts/bench_moe_decode_ut.py \
 ## 放宽形状限制的验证
 
 新增 CPU 准入和 Pallas 解释模式验证覆盖 M=272、H/I=1536、E=129，以及专家 127/128、重复/无效 ID、零权重行和显式实现选择。解释模式仅用于测试，不作为运行时分支；资源异常传播测试确认不会重试原 GMM。
-本轮未重新进行 TPU 编译或 E2E 压测，当前运行服务仍加载此前版本。下面的 203 项 TPU 测试及性能结果来自限制放宽前的 `3477a1f`。
+限制放宽时新增了 CPU 验证；2026-09-22 已补跑最新 kernel 的 M=256、pool16/32/64 硬件性能 UT，详见下节。未重跑 E2E；下面的 203 项 TPU 测试及 E2E 数据仍来自限制放宽前的 `3477a1f`。
 
 ```bash
 JAX_PLATFORMS=cpu .venv/bin/python -m pytest -q \
   third_party/torchtpu-vllm/tests/kernels/test_moe_dense_expert_shapes.py
 ```
+
+## 2026-09-22 仓库内性能 UT 复测
+
+性能 UT 及分析工具现位于 `third_party/torchtpu-vllm/scripts/`，可独立于本项目运行。
+最新 kernel `bed6411`、seed=20260921、256 token、DP4/TP2/EP8，
+各组 20 次预热、200 次同步 host 计时、20 次设备采集，三组数值与路由校验通过。
+TPU:0 TensorCore XLA Ops 之和的单 forward 均值：
+
+| pool | standard | dense_expert | 耗时变化 |
+|---|---:|---:|---:|
+| 16 | 238.16 μs | 189.65 μs | −20.4% |
+| 32 | 305.84 μs | 263.69 μs | −13.8% |
+| 64 | 438.02 μs | 412.29 μs | −5.9% |
+
+复现命令和全部 rank 数据见 [仓库内报告](third_party/torchtpu-vllm/docs/developers_guide/dense_expert_moe.md)。
+原始数据：`runs/moe-inrepo-ut-20260922T013216Z/`。本次未重新压测完整模型服务。
 
 ## 布局修复与新增验证
 

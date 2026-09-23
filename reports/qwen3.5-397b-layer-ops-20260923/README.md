@@ -13,9 +13,35 @@
 这里的粒度是编译后的 fusion、Pallas kernel、collective 和设备搬运事件。Pallas 内部的 MXU/向量指令不逐条拆分；表格解释其融合计算，不能将解释中的多个数学步骤算作多个独立 launch。
 
 - 一个融合 kernel 可能同时完成 GEMM、缩放、residual add，甚至下一次 RMSNorm 的部分归约。这些步骤不能再当作几个独立 kernel 计数。
-- CSV 同时保留计算、实际 copy/布局物化、DMA 和异步边界。`copy-start/copy-done` 是同一次 DMA 的两端，TensorCore 发起异步调用与 SparseCore 执行也不能重复计费。
+- 原始 CSV 同时保留计算、实际 copy/布局物化、DMA 和异步边界；正文链接默认展示 ≥1 µs 的关注清单。`copy-start/copy-done` 是同一次 DMA 的两端，TensorCore 发起异步调用与 SparseCore 执行也不能重复计费。
 - 纯形状视图、被消除的操作，没有设备事件就不列为独立执行算子。
 - GDN 与 full attention 不同，分别选 **layer 1** 和 **layer 3**，层号从 0 开始。这个模型每四层是 3 个 GDN 加 1 个 full attention，共 60 层。
+
+## 默认筛选：只关注 ≥1 µs 的事件
+
+下面正文中的逐条清单默认筛除 `duration_us < 1` 的事件，原始清单仍完整归档。阈值使用采集中的设备事件时长，不是 XProf 的默认显示过滤器。
+
+按单 rank、单个完整模型步，取 GDN layer 1 和 full-attention layer 3：
+
+| 配置 | GDN 计算/索引事件 ≥1 µs | Full-attention 计算/索引事件 ≥1 µs | GDN 全类别事件 ≥1 µs | Full-attention 全类别事件 ≥1 µs |
+|---|---:|---:|---:|---:|
+| DP8 prefill | 53 | 57 | 80 | 96 |
+| PCP8 prefill | 67 | 64 | 117 | 98 |
+| DP4/TP2 decode | 48 | 54 | 64 | 69 |
+
+“计算/索引事件”统计 TensorCore `XLA Ops` 中的 fusion、实际 Pallas 调用及独立 convert、slice、broadcast、reduce、pad、reduce-window、dynamic-slice、add、concatenate、dynamic-update-slice；排除 ConcatBitcast、copy/reshape、通信、控制边界。SparseCore 和其他类别保留在“全类别事件”中。**这些数字不是独立 kernel launch 数，也不是画面中肉眼可见的大块数量。**
+
+筛选仅用于确定优化关注范围，不代表这些短事件没有执行。所选层中被过滤事件的时长之和：
+
+| 配置 | GDN 被过滤事件 | 时长之和（µs） | Full-attention 被过滤事件 | 时长之和（µs） |
+|---|---:|---:|---:|---:|
+| DP8 prefill | 208 | 23.570 | 188 | 22.696 |
+| PCP8 prefill | 287 | 36.211 | 193 | 22.080 |
+| DP4/TP2 decode | 73 | 19.444 | 18 | 1.310 |
+
+上述和可能包含嵌套、重叠及异步边界，不能当作层的墙钟时间或预计可优化收益。PCP 的跨层共享清单另有 4,301 条被过滤事件，时长之和为 1,776.301 µs；保留累计统计，避免只看单次时长而漏掉大量重复操作。
+
+[筛选规则、各清单行数、被过滤事件累计时长及原始文件校验值](event-filter-summary.json)
 
 ## 运行范围
 
@@ -139,9 +165,9 @@ flowchart LR
 
 PCP 还有多层复用的调度构造，包括实际的 `while`、sort、prefix sum 和索引 kernel。逐条保留在共享清单中，循环内重复执行的事件也保留，没有仅按 HLO 静态名字去重后假装每次只执行一次。
 
-- [PCP GDN layer 1：逐条事件与含义](pcp8/analysis/layers/layer-1-events-explained.csv)
-- [PCP full-attention layer 3：逐条事件与含义](pcp8/analysis/layers/layer-3-events-explained.csv)
-- [PCP 共享调度/入口事件](pcp8/analysis/layers/layer--1-events-explained.csv.gz)
+- [PCP GDN layer 1：逐条事件与含义](pcp8/analysis/layers/layer-1-events-ge-1us.csv)
+- [PCP full-attention layer 3：逐条事件与含义](pcp8/analysis/layers/layer-3-events-ge-1us.csv)
+- [PCP 共享调度/入口事件](pcp8/analysis/layers/layer--1-events-ge-1us.csv.gz)
 - [PCP trace 完整性检查](pcp8/analysis/validation.json)
 
 PCP 的 TorchTPU/Kineto 转换曾提示 100 万事件上限。本报告直接读取原始 XPlane：其中 5 段 4096-token 图，每段都包含 45 个 GDN、15 个 full-attention（每层四个核心调用）和 60 个 MoE；所选段的 26,695 条 TensorCore/SparseCore 事件名称均匹配最终 HLO。其他 token bucket 不混入该单层清单。
@@ -217,9 +243,9 @@ flowchart TD
 
 选取中间一个完整步，**7,587 条 TensorCore/SparseCore 事件全部匹配最终 HLO**。公共 RoPE 位置/查表准备单列，不全部算入第一个 full-attention 层。
 
-- [Decode GDN layer 1：137 条事件及含义](decode/analysis/layers/layer-1-events-explained.csv)
-- [Decode full-attention layer 3：87 条事件及含义](decode/analysis/layers/layer-3-events-explained.csv)
-- [Decode 共享准备：143 条事件](decode/analysis/layers/layer--1-events-explained.csv.gz)
+- [Decode GDN layer 1：64 条 ≥1 µs 事件及含义](decode/analysis/layers/layer-1-events-ge-1us.csv)
+- [Decode full-attention layer 3：69 条 ≥1 µs 事件及含义](decode/analysis/layers/layer-3-events-ge-1us.csv)
+- [Decode 共享准备：117 条 ≥1 µs 事件](decode/analysis/layers/layer--1-events-ge-1us.csv.gz)
 - [最终编译图入口](decode/analysis/compiled-decode/entry.txt.gz)
 - [完整性、实际请求 usage 与纯 decode 窗口证明](decode/analysis/validation.json)
 
@@ -238,14 +264,14 @@ flowchart TD
 DP8 rank 0，取第一段真实 model module，编译输入为 4096 tokens：
 
 - TensorCore `XLA Ops` 的 **17,174 个不同事件名全部匹配最终 codegen HLO**；该步另有 442 条 SparseCore 事件，也全部匹配。
-- [GDN layer 1：逐条事件、shape、用途与 HLO 位置](dp8/analysis/layers/layer-1-events-explained.csv)
-- [Full-attention layer 3：逐条事件、shape、用途与 HLO 位置](dp8/analysis/layers/layer-3-events-explained.csv)
-- [多层共享与模型入口事件](dp8/analysis/layers/layer--1-events-explained.csv.gz)
+- [GDN layer 1：逐条事件、shape、用途与 HLO 位置](dp8/analysis/layers/layer-1-events-ge-1us.csv)
+- [Full-attention layer 3：逐条事件、shape、用途与 HLO 位置](dp8/analysis/layers/layer-3-events-ge-1us.csv)
+- [多层共享与模型入口事件](dp8/analysis/layers/layer--1-events-ge-1us.csv.gz)
 - 完整设备记录（静态 metadata 已去重）：保存在本地原始采集目录的 `dp8/analysis/device-rank0/events.csv`，未纳入 Git
 - [编译图入口，已移除巨大的二进制 kernel body 字段](dp8/analysis/compiled-4096/entry.txt.gz)
 - [采集完成记录](dp8/capture-complete.json)
 
-层归属依据模型权重参数及编译数据依赖。只依赖请求 metadata 的准备算子，只有在下游唯一属于某一层时才归入该层；多层共享的算子单列。跨层融合（例如上一层输出 GEMM 同时做下一层 RMSNorm 的部分归约）保留实际 kernel 边界，不能拆回独立 Python 层算子。288/284 等 CSV 行数是包含搬运和异步边界的**设备事件数**，不是模型独立数学算子的数量。
+层归属依据模型权重参数及编译数据依赖。只依赖请求 metadata 的准备算子，只有在下游唯一属于某一层时才归入该层；多层共享的算子单列。跨层融合（例如上一层输出 GEMM 同时做下一层 RMSNorm 的部分归约）保留实际 kernel 边界，不能拆回独立 Python 层算子。原始 CSV 的 288/284 等行数是包含搬运和异步边界的**设备事件数**，不是独立 kernel launch 数；正文关注清单已按 ≥1 µs 筛选。
 
 SparseCore 采用 daily profiler 的默认采样：1 个 SparseCore、1 个 tile。TensorCore 侧保留异步调用事件，结合最终 HLO 识别完整调用；不将采样到的单个 SC tile 当作所有硬件单元的逐指令 trace。
 
@@ -254,8 +280,16 @@ SparseCore 采用 daily profiler 的默认采样：1 个 SparseCore、1 个 tile
 
 ## 附件与原始证据
 
-本目录提交报告、6 份可直接读取的单层 CSV、3 份压缩的共享事件 CSV、3 份压缩 HLO 入口摘要，以及各次运行的启动配置、请求 usage、完成记录和验证结果。`.gz` 附件下载后用 `gzip -dc 文件名` 解压读取；压缩仅改变文件包装，不改变内容。
+本目录提交报告、原始与 ≥1 µs 筛选后的单层/共享事件 CSV、3 份压缩 HLO 入口摘要，以及各次运行的启动配置、请求 usage、完成记录和验证结果。`.gz` 附件下载后用 `gzip -dc 文件名` 解压读取；压缩仅改变文件包装，不改变内容。
 
 [采集验证记录及完整 HLO 的 SHA-256](capture-verification.json) 保存原始 HLO 路径、编译 program ID 和清单行数。CSV 的 `hlo_source` / `hlo_line` 指向采集机器上的完整 HLO；行号不能直接用于删去 kernel 二进制字段后的入口摘要。CSV 的源码绝对路径同样是采集时的溯源信息。
 
 本目录为 2026-09-23 的固定采集快照，不参与 daily 吞吐历史的自动更新。
+
+### 未筛选的原始清单
+
+| 配置 | GDN layer 1 | Full-attention layer 3 | 跨层共享 |
+|---|---|---|---|
+| dp8 | [完整 CSV](dp8/analysis/layers/layer-1-events-explained.csv) | [完整 CSV](dp8/analysis/layers/layer-3-events-explained.csv) | [完整 CSV.gz](dp8/analysis/layers/layer--1-events-explained.csv.gz) |
+| pcp8 | [完整 CSV](pcp8/analysis/layers/layer-1-events-explained.csv) | [完整 CSV](pcp8/analysis/layers/layer-3-events-explained.csv) | [完整 CSV.gz](pcp8/analysis/layers/layer--1-events-explained.csv.gz) |
+| decode | [完整 CSV](decode/analysis/layers/layer-1-events-explained.csv) | [完整 CSV](decode/analysis/layers/layer-3-events-explained.csv) | [完整 CSV.gz](decode/analysis/layers/layer--1-events-explained.csv.gz) |

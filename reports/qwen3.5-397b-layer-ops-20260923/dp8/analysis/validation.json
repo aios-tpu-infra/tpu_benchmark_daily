@@ -1,0 +1,20 @@
+{
+  "model_steps": 9,
+  "unique_op_names": 17174,
+  "occurrences_per_name": {
+    "9": 17174
+  },
+  "per_step_kernel_counts": {
+    "fused_conv1d_gdn_batched.": 45,
+    "fused_conv1d_gdn_per_seq.": 45,
+    "RPAd-": 15,
+    "RPAm-": 15,
+    "fused_ep_moe_v2_": 60,
+    "moe_v2_combine_": 60,
+    "shard_map.": 60
+  },
+  "requests": 32,
+  "usage": {
+    "(8192, 1)": 32
+  }
+}

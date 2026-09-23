@@ -1,0 +1,29 @@
+{
+  "mode": "pcp8",
+  "daily_revision": "8c366c2b08f0cea9a8868a51487e66c4d5b020e3",
+  "plugin_revision": "9bfea3dee1282e36db69bd3a5fce37b2aa7abdfc",
+  "argv": [
+    "bash",
+    "scripts/start_prefill_server.sh",
+    "--config",
+    "pcp8"
+  ],
+  "overrides": {
+    "MODEL_DIR": "/mnt/data/models/qwen3.5-397B-A17B-fp8",
+    "HOST": "127.0.0.1",
+    "PORT": "18180",
+    "TPU_SKIP_MDS_QUERY": "1",
+    "OMP_NUM_THREADS": "2",
+    "OPENBLAS_NUM_THREADS": "2",
+    "RESET_COMPILE_CACHE": "0",
+    "PROFILE_DIR": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/pcp8/trace"
+  },
+  "versions": {
+    "torch": "2.13.0+cpu",
+    "torch-tpu": "0.1.1.dev20260912075415",
+    "vllm": "0.29.0+empty",
+    "jax": "0.10.2",
+    "jaxlib": "0.10.2",
+    "libtpu": "0.0.47"
+  }
+}

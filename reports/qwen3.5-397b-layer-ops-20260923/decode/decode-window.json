@@ -1,0 +1,12 @@
+{
+  "all_prompts_prefilled": true,
+  "active_per_dp_rank": [
+    64,
+    64,
+    64,
+    64
+  ],
+  "active": 256,
+  "observed": 1790125465.4787667,
+  "capture_seconds": 0.5
+}

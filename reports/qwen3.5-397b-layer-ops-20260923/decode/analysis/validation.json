@@ -1,0 +1,80 @@
+{
+  "model_modules": 14,
+  "complete_model_modules": 14,
+  "selected_step": 7,
+  "selected_step_all_names_matched": true,
+  "per_step_core_counts": {
+    "fused_conv1d_gdn_batched.": 45,
+    "fused_conv1d_gdn_per_seq.": 45,
+    "RPAd-": 15,
+    "RPAm-": 15,
+    "dense_expert_moe-": 60,
+    "router_topk.": 60
+  },
+  "final_hlo": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/decode/hlo/pid-372341/module_3197.tt_jit_layernorm_L62C0_fused_add_rms_norm_add.cl_972931731.after_codegen.txt",
+  "requests": 264,
+  "usage": {
+    "(1024, 32)": 8,
+    "(65536, 1024)": 256
+  },
+  "decode_window": {
+    "all_prompts_prefilled": true,
+    "active_per_dp_rank": [
+      64,
+      64,
+      64,
+      64
+    ],
+    "active": 256,
+    "observed": 1790125465.4787667,
+    "capture_seconds": 0.5
+  },
+  "raw_xplane": {
+    "input": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/decode/trace/plugins/profile/2026_09_23_09_04_25/rank0_laxshebx-fmh9.us-central1-c.c.aidc-tpu.internal.xplane.pb",
+    "errors": [],
+    "warnings": [],
+    "tracks": [
+      {
+        "plane": "/device:TPU:0",
+        "line": "XLA Modules",
+        "count": 84
+      },
+      {
+        "plane": "/device:TPU:0",
+        "line": "XLA Ops",
+        "count": 101906
+      },
+      {
+        "plane": "/device:TPU:0",
+        "line": "Async XLA Ops",
+        "count": 24850
+      },
+      {
+        "plane": "/device:TPU:1",
+        "line": "XLA Modules",
+        "count": 84
+      },
+      {
+        "plane": "/device:TPU:1",
+        "line": "XLA Ops",
+        "count": 101906
+      },
+      {
+        "plane": "/device:TPU:0 SparseCore 0",
+        "line": "SparseCore Offload Type",
+        "count": 3668
+      },
+      {
+        "plane": "/device:TPU:0 SparseCore 0",
+        "line": "Sparse Core Modules",
+        "count": 3668
+      },
+      {
+        "plane": "/device:TPU:0 SparseCore 0",
+        "line": "Sparse Core Ops",
+        "count": 4830
+      }
+    ],
+    "metadata": 16695
+  }
+}

@@ -19,6 +19,10 @@ TTFT P50/P90/P99。
 不再使用 `--load-format dummy`。由于真实权重与此前 dummy-weight 结果不可
 直接比较，报告历史已从首轮真实权重测试 `20260728T012922Z` 重新开始。
 
+## 编译后算子分析
+
+[Qwen3.5-397B prefill / decode 单层算子报告（2026-09-23）](reports/qwen3.5-397b-layer-ops-20260923/README.md)：基于实际 TPU trace 与最终 HLO，覆盖 DP8、PCP8 prefill 和 DP4/TP2 decode，附逐条算子、shape、用途及验证记录。
+
 ## Recent benchmark throughput
 
 <!-- BENCHMARK_REPORT_START -->

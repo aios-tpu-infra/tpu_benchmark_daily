@@ -1,0 +1,13 @@
+{
+  "plan": {
+    "mode": "decode",
+    "concurrency": 256,
+    "prompt_tokens": 65536,
+    "output_tokens": 1024,
+    "dp": 4,
+    "seed_source": "daily natural-language prompt builder",
+    "prompt_hash": "c30ea8947b79cb2da7fab0385669d877ea1bd18bdf2d3f7757ced8af79e0d748"
+  },
+  "requests": 264,
+  "completed": 1790125534.6677668
+}

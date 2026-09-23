@@ -1,0 +1,51 @@
+{
+  "local_links_checked": 15,
+  "captures": {
+    "dp8": {
+      "requests": 32,
+      "events_in_selected_step": 17616,
+      "representative_layer_rows": {
+        "-1": 240,
+        "1": 288,
+        "3": 284
+      },
+      "hlo": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/dp8/hlo/pid-233147/module_5516.tt_jit_layernorm_L62C0_fused_add_rms_norm_add.cl_972931731.after_codegen.txt",
+      "hlo_sha256": "4cf7ded7930b27209c7759bfd501c16fb292d3919250db24118d61eead1f6a08",
+      "program_id": "819692635816115617"
+    },
+    "pcp8": {
+      "requests": 32,
+      "events_in_selected_step": 26695,
+      "representative_layer_rows": {
+        "-1": 4579,
+        "1": 404,
+        "3": 291
+      },
+      "hlo": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/pcp8/hlo/pid-290362/module_9043.tt_jit_layernorm_L62C0_fused_add_rms_norm_add.cl_972931731.after_codegen.txt",
+      "hlo_sha256": "dc6a39e8b871ed3042f2794c532cfb9460972e36370f48a7d3e54cb3279de8a0",
+      "program_id": "12900864706747218910"
+    },
+    "decode": {
+      "requests": 264,
+      "events_in_selected_step": 7587,
+      "representative_layer_rows": {
+        "-1": 143,
+        "1": 137,
+        "3": 87
+      },
+      "hlo": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/decode/hlo/pid-372341/module_3197.tt_jit_layernorm_L62C0_fused_add_rms_norm_add.cl_972931731.after_codegen.txt",
+      "hlo_sha256": "f3c891e21e049fb0072ce7d97363e43a96f90817994622498fb00074c9325cf2",
+      "program_id": "3750295125217914509"
+    }
+  },
+  "vfio_devices_free": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ]
+}

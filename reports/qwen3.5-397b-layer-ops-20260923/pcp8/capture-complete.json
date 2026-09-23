@@ -1,0 +1,13 @@
+{
+  "plan": {
+    "mode": "pcp8",
+    "concurrency": 8,
+    "prompt_tokens": 8192,
+    "output_tokens": 1,
+    "dp": 1,
+    "seed_source": "daily natural-language prompt builder",
+    "prompt_hash": "8e72c12492fd342d5fb65b591d697ace7d639382efbc34e35429d572ded2e193"
+  },
+  "requests": 32,
+  "completed": 1790123624.89395
+}

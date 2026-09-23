@@ -1,0 +1,17 @@
+{
+  "matched_4096_modules": 5,
+  "per_step_core_counts": {
+    "fused_pcp_qkvz_projection_gdn_": 45,
+    "pcp_streaming_attention_current_state_": 15,
+    "pcp_write_captured_kv_": 15,
+    "pcp_streaming_attention_history_output_": 15,
+    "pcp_streaming_attention_zero_history_output_": 15,
+    "fused_ep_moe_v2_": 60,
+    "moe_v2_combine_": 60,
+    "shard_map.": 60
+  },
+  "requests": 32,
+  "selected_step_all_names_matched": true,
+  "profiler_warning": "TorchTPU/Kineto parsing warned at 1,000,000 events; raw XPlane selected modules have all 60 layer core calls",
+  "raw_xplane_errors": []
+}

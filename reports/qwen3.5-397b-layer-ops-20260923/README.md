@@ -1,5 +1,7 @@
 # Qwen3.5-397B：prefill / decode 的编译后单层算子
 
+**先读：[每层怎么算——计算流总览](COMPUTE-FLOWS.md)**。按三种配置分别说明 GDN 和 full-attention 的输入、算子、分支、通信及输出，并附六份从最终 HLO 提取的 producer-consumer 依赖表。本文与 CSV 用于查采集证据。
+
 采集对象是 `tpu_benchmark_daily` 当前默认模型 **Qwen3.5-397B-A17B-FP8**，不是 Qwen3.8。模型位于 `/mnt/data/models/qwen3.5-397B-A17B-fp8`。
 
 **三组均已完成：DP8 prefill、PCP8 prefill、DP4/TP2 decode。清单均以真实设备 trace 和最终 codegen HLO 为依据。本次服务已停止，8 个 TPU 设备已释放。**

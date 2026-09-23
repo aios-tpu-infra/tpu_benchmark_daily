@@ -1,0 +1,45 @@
+{
+  "model_layer_pattern_checked": true,
+  "links_checked": 53,
+  "checks": [
+    "Names and shapes match final HLO and actual selected trace",
+    "All projected input IDs exist and form an acyclic graph",
+    "DMA/async control boundaries are bypassed",
+    "Sub-1us nodes omitted except complete logical collectives",
+    "While bodies represented by their parent loop",
+    "Every projected edge has an actual HLO operand path with no intervening retained node"
+  ],
+  "cases": [
+    {
+      "case": "decode-full-attention",
+      "dependency_nodes": 65,
+      "validated": true
+    },
+    {
+      "case": "decode-gdn",
+      "dependency_nodes": 57,
+      "validated": true
+    },
+    {
+      "case": "dp8-full-attention",
+      "dependency_nodes": 88,
+      "validated": true
+    },
+    {
+      "case": "dp8-gdn",
+      "dependency_nodes": 77,
+      "validated": true
+    },
+    {
+      "case": "pcp8-full-attention",
+      "dependency_nodes": 92,
+      "validated": true
+    },
+    {
+      "case": "pcp8-gdn",
+      "dependency_nodes": 99,
+      "validated": true
+    }
+  ],
+  "projected_edges_verified_against_hlo": 742
+}

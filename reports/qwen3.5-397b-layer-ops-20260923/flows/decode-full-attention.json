@@ -1,0 +1,1087 @@
+{
+  "mode": "decode",
+  "layer": 3,
+  "layer_type": "full-attention",
+  "source_hlo": "/mnt/data/workspace/tpu_benchmark_daily/runs/layer-ops-20260923/decode/hlo/pid-372341/module_3197.tt_jit_layernorm_L62C0_fused_add_rms_norm_add.cl_972931731.after_codegen.txt",
+  "projection": "Final HLO operand edges; bypass sub-1us events, tuple wrappers and DMA/async control; retain logical collective once; collapse while body.",
+  "nodes": [
+    {
+      "id": "N01",
+      "name": "copy.563",
+      "opcode": "copy",
+      "group": "数据复制/布局物化",
+      "purpose": "编译器生成的实际数据复制或物理布局变换；比较 operand_shapes 与 shape 可区分 tiling/维度顺序和 memory space 的变化。",
+      "inputs": [],
+      "external_inputs": [
+        "运行时输入/缓存"
+      ],
+      "shape": "bf16[1048576,64]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73833,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N02",
+      "name": "abs_reduce_fusion.173",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按 token 行计算 max(abs(x))，得到动态 FP8 量化 scale；可能融合前面的 RMSNorm/门控操作。",
+      "inputs": [],
+      "external_inputs": [
+        "上游层输出/统计量",
+        "权重/scale"
+      ],
+      "shape": "(bf16[64]{0:T(256)(128)(2,1)}, bf16[64,4096]{1,0:T(16,128)(2,1)})",
+      "hlo_line": 73873,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N03",
+      "name": "compare_select_fusion.293",
+      "opcode": "fusion",
+      "group": "FP8 量化 scale",
+      "purpose": "计算/保护动态 FP8 scale：max(abs(x))/448；全零行使用非零替代 scale，避免除零。部分 fusion 同时生成 MoE 的有效行 mask。",
+      "inputs": [
+        "N02"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 73874,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N04",
+      "name": "clamp_convert_fusion.128",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按动态 scale 缩放并截断到 FP8 可表示范围，再转换为 FP8，供后续 MXU GEMM 使用。",
+      "inputs": [
+        "N02",
+        "N03"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,4096]{1,0:T(32,128)(4,1)}",
+      "hlo_line": 73875,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N05",
+      "name": "fusion.119",
+      "opcode": "fusion",
+      "group": "全注意力输入投影",
+      "purpose": "FP8 GEMM：hidden→Q、输出 gate、K、V；融合量化 scale 和输出转换。",
+      "inputs": [
+        "N03",
+        "N04"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,8704]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73876,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N06",
+      "name": "fusion.1673",
+      "opcode": "fusion",
+      "group": "FP8 KV 与 Q/K 准备",
+      "purpose": "融合 K/V 转 FP8，以及相邻 Q/K 归一化的切分或归约；tuple 同时返回 FP8 张量和 FP32 中间统计量。",
+      "inputs": [
+        "N05"
+      ],
+      "external_inputs": [],
+      "shape": "(f8e4m3fn[64,1,256]{2,0,1:T(8,128)(4,1)}, f32[64]{0:T(128)})",
+      "hlo_line": 73877,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N07",
+      "name": "as_strided.28",
+      "opcode": "reshape",
+      "group": "数据复制/布局物化",
+      "purpose": "编译器生成的实际数据复制或物理布局变换；比较 operand_shapes 与 shape 可区分 tiling/维度顺序和 memory space 的变化。",
+      "inputs": [
+        "N05"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,17,512]{2,1,0:T(8,128)(2,1)}",
+      "hlo_line": 73878,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N08",
+      "name": "add_rsqrt_fusion.188",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N06"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 73879,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N09",
+      "name": "multiply_add_fusion.165",
+      "opcode": "fusion",
+      "group": "Q/K RMSNorm",
+      "purpose": "对每个 Q/K head 归一化并应用 head 维度的可学习权重；可与邻近算子融合。",
+      "inputs": [
+        "N05",
+        "N08"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,256]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73880,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N10",
+      "name": "slice_bitcast_fusion.14",
+      "opcode": "fusion",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N09"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,1,192]{2,0,1:T(8,128)(2,1)}",
+      "hlo_line": 73881,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N11",
+      "name": "fusion.792",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N07"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64,16]{1,0:T(8,128)}",
+      "hlo_line": 73882,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N12",
+      "name": "add_rsqrt_fusion.56",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N11"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64,16]{1,0:T(8,128)}",
+      "hlo_line": 73883,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N13",
+      "name": "subtract_bitcast_fusion.14",
+      "opcode": "fusion",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N09"
+      ],
+      "external_inputs": [
+        "跨层共享准备"
+      ],
+      "shape": "(bf16[64,1,32]{2,0,1:T(8,128)(2,1)}, bf16[64,32]{1,0:T(8,128)(2,1)}, bf16[64,32]{1,0:T(8,128)(2,1)})",
+      "hlo_line": 73884,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N14",
+      "name": "add_bitcast_fusion.14",
+      "opcode": "fusion",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N09",
+        "N13"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,1,32]{2,0,1:T(8,128)(2,1)}",
+      "hlo_line": 73885,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N15",
+      "name": "multiply_add_fusion.128",
+      "opcode": "fusion",
+      "group": "Q/K RMSNorm",
+      "purpose": "对每个 Q/K head 归一化并应用 head 维度的可学习权重；可与邻近算子融合。",
+      "inputs": [
+        "N07",
+        "N12"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,16,256]{2,1,0:T(8,128)(2,1)}",
+      "hlo_line": 73886,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N16",
+      "name": "multiply_subtract_fusion.14",
+      "opcode": "fusion",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N13",
+        "N15"
+      ],
+      "external_inputs": [],
+      "shape": "(bf16[64,16,32]{2,1,0:T(8,128)(2,1)}, bf16[64,16,32]{2,1,0:T(8,128)(2,1)})",
+      "hlo_line": 73887,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N17",
+      "name": "as_strided.637",
+      "opcode": "slice",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N15"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,16,192]{2,1,0:T(8,128)(2,1)}",
+      "hlo_line": 73888,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N18",
+      "name": "select_convert_fusion.29",
+      "opcode": "fusion",
+      "group": "FP8 KV 准备",
+      "purpose": "按 KV scale 将 K/V 截断并转换为 FP8，供分页缓存更新；量化发生在 RPA 调用之前。",
+      "inputs": [
+        "N10",
+        "N13",
+        "N14"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,1,256]{2,0,1:T(8,128)(4,1)}",
+      "hlo_line": 73889,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N19",
+      "name": "pad_maximum_fusion.15",
+      "opcode": "fusion",
+      "group": "FP8 KV 准备",
+      "purpose": "把已量化的 K/V 拼接、补齐到 RPA 接口要求的布局；随后由 RPA kernel 更新 KV pool。",
+      "inputs": [
+        "N06",
+        "N18"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,1,512]{2,0,1:T(8,128)(4,1)}",
+      "hlo_line": 73890,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N20",
+      "name": "pad_maximum_fusion",
+      "opcode": "fusion",
+      "group": "RoPE",
+      "purpose": "读取位置对应的 cos/sin，旋转 Q/K 的 rotary 部分；本模型只旋转 head_dim 的 1/4。",
+      "inputs": [
+        "N16",
+        "N17"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,16,256]{2,1,0:T(8,128)(2,1)}",
+      "hlo_line": 73893,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N21",
+      "name": "transpose_reshape_reshape.30",
+      "opcode": "reshape",
+      "group": "数据复制/布局物化",
+      "purpose": "编译器生成的实际数据复制或物理布局变换；比较 operand_shapes 与 shape 可区分 tiling/维度顺序和 memory space 的变化。",
+      "inputs": [
+        "N20"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[1,64,8,2,256]{4,3,2,1,0:T(2,128)(2,1)}",
+      "hlo_line": 73894,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N22",
+      "name": "pad.385.clone",
+      "opcode": "pad",
+      "group": "索引/张量辅助",
+      "purpose": "pad：为 attention/MoE 准备索引或 tensor 数据；使用本行 shape、metadata 和 HLO 确认它处理的是激活还是 INT32 调度数据。",
+      "inputs": [
+        "N19"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[128,2,256]{0,2,1:T(8,128)(4,1)}",
+      "hlo_line": 73897,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N23",
+      "name": "RPAd-snh-p128-b8-q1-k3328.45",
+      "opcode": "custom-call",
+      "group": "全注意力 RPA",
+      "purpose": "单 token/decode RPA：读取分页 KV，计算 QKᵀ、softmax、PV；混合图同时保留此路径，纯 prefill 时其有效 decode 请求数为零。",
+      "inputs": [
+        "N21",
+        "N22"
+      ],
+      "external_inputs": [
+        "上游层输出/统计量",
+        "跨层共享准备",
+        "运行时输入/缓存"
+      ],
+      "shape": "(bf16[1,64,8,2,256]{4,3,2,1,0:T(2,128)(2,1)}, f8e4m3fn[42339,2,64,4,128]{4,3,2,1,0:T(4,128)(4,1)})",
+      "hlo_line": 73899,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N24",
+      "name": "RPAm-snh-p128-b2-q256-k256.45",
+      "opcode": "custom-call",
+      "group": "全注意力 RPA",
+      "purpose": "多 token RPA：更新/读取分页 KV，执行带因果 mask 的 QKᵀ、softmax 和 PV；这些步骤在同一 Pallas kernel 内。",
+      "inputs": [
+        "N22",
+        "N23"
+      ],
+      "external_inputs": [
+        "跨层共享准备",
+        "运行时输入/缓存"
+      ],
+      "shape": "(bf16[1,64,8,2,256]{4,3,2,1,0:T(2,128)(2,1)}, f8e4m3fn[42339,2,64,4,128]{4,3,2,1,0:T(4,128)(4,1)})",
+      "hlo_line": 73929,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N25",
+      "name": "reshape_transpose_reshape.30",
+      "opcode": "reshape",
+      "group": "数据复制/布局物化",
+      "purpose": "编译器生成的实际数据复制或物理布局变换；比较 operand_shapes 与 shape 可区分 tiling/维度顺序和 memory space 的变化。",
+      "inputs": [
+        "N24"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,16,256]{2,1,0:T(8,128)(2,1)}",
+      "hlo_line": 73958,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N26",
+      "name": "abs_reduce_fusion.56",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按 token 行计算 max(abs(x))，得到动态 FP8 量化 scale；可能融合前面的 RMSNorm/门控操作。",
+      "inputs": [
+        "N07",
+        "N25"
+      ],
+      "external_inputs": [],
+      "shape": "(bf16[64]{0:T(256)(128)(2,1)}, f32[64,16,256]{2,1,0:T(8,128)})",
+      "hlo_line": 73959,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N27",
+      "name": "compare_select_fusion.292",
+      "opcode": "fusion",
+      "group": "FP8 量化 scale",
+      "purpose": "计算/保护动态 FP8 scale：max(abs(x))/448；全零行使用非零替代 scale，避免除零。部分 fusion 同时生成 MoE 的有效行 mask。",
+      "inputs": [
+        "N26"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 73963,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N28",
+      "name": "sparse-core-data-format-call.70.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "SparseCore 布局转换",
+      "purpose": "将数据转换为消费者要求的物理布局；start/update/done 分别表示启动、提交操作数和等待完成，源/目标 tiling 见 shape。",
+      "inputs": [
+        "N26"
+      ],
+      "external_inputs": [],
+      "shape": "f32[8,8,16,256]{3,1,2,0:T(8,128)}",
+      "hlo_line": 73964,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N29",
+      "name": "clamp_convert_fusion.127",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按动态 scale 缩放并截断到 FP8 可表示范围，再转换为 FP8，供后续 MXU GEMM 使用。",
+      "inputs": [
+        "N27",
+        "N28"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,4096]{1,0:T(32,128)(4,1)}",
+      "hlo_line": 73966,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N30",
+      "name": "fusion.303",
+      "opcode": "fusion",
+      "group": "attention 输出投影",
+      "purpose": "把所有本地 attention head 的输出投影回 hidden；编译器可融合反量化、residual add 或下一归一化的部分归约。",
+      "inputs": [
+        "N27",
+        "N29"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73967,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N31",
+      "name": "all-reduce.378.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "TP all-reduce",
+      "purpose": "对 TP 分片的部分输出求和；实际 replica groups={{0,1},{2,3},{4,5},{6,7}}。start/update/done 是同一次通信的控制边界。",
+      "inputs": [
+        "N30"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73970,
+      "collectives": [
+        {
+          "opcode": "all-reduce",
+          "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+          "replica_groups": "{{0,1},{2,3},{4,5},{6,7}}",
+          "attrs": "channel_id=1, replica_groups={{0,1},{2,3},{4,5},{6,7}}, use_global_device_ids=true, to_apply=%region_352.406.clone, metadata={op_name=\"distributed.all_reduce/distributed.all_reduce\" stack_frame_id=177}"
+        }
+      ],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N32",
+      "name": "multiply_reduce_fusion.113",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N31"
+      ],
+      "external_inputs": [
+        "上游层输出/统计量"
+      ],
+      "shape": "(f32[64]{0:T(128)}, bf16[64,4096]{1,0:T(16,128)(2,1)})",
+      "hlo_line": 73971,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N33",
+      "name": "add_rsqrt_fusion.187",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N32"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 73972,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N34",
+      "name": "abs_reduce_fusion.172",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按 token 行计算 max(abs(x))，得到动态 FP8 量化 scale；可能融合前面的 RMSNorm/门控操作。",
+      "inputs": [
+        "N31",
+        "N32",
+        "N33"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "(bf16[64]{0:T(256)(128)(2,1)}, bf16[64,4096]{1,0:T(16,128)(2,1)})",
+      "hlo_line": 73973,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N35",
+      "name": "fusion.1998",
+      "opcode": "fusion",
+      "group": "Router 打分",
+      "purpose": "BF16 GEMM：每个 token 的 hidden→512 个专家 logits；softmax/top-k 在后续 kernel。",
+      "inputs": [
+        "N34"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,512]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73974,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N36",
+      "name": "all-gather.133.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "EP dispatch / all-gather",
+      "purpose": "收集该组 token 激活、router logits 或路由计划，供本地专家处理；实际 replica groups={{0,4,6,2},{1,5,7,3}}，输出 bf16[256,512]{1,0:T(8,128)(2,1)}。异步边界不能重复计费。",
+      "inputs": [
+        "N35"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[256,512]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73980,
+      "collectives": [
+        {
+          "opcode": "all-gather",
+          "shape": "bf16[256,512]{1,0:T(8,128)(2,1)}",
+          "replica_groups": "{{0,4,6,2},{1,5,7,3}}",
+          "attrs": "channel_id=1, replica_groups={{0,4,6,2},{1,5,7,3}}, dimensions={0}, use_global_device_ids=true, metadata={op_name=\"distributed.all_gather_into_tensor/distributed.all_gather_into_tensor\" stack_frame_id=231}"
+        }
+      ],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N37",
+      "name": "reduce.1244",
+      "opcode": "reduce",
+      "group": "Router FP32 softmax",
+      "purpose": "对专家 logits 做稳定 softmax：减去行最大值，exp、求和、归一化；本行 fused_ops 区分求和或最终除法，产生 FP32 路由分数。",
+      "inputs": [
+        "N36"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[256]{0:T(256)(128)(2,1)}",
+      "hlo_line": 73981,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N38",
+      "name": "convert.753",
+      "opcode": "convert",
+      "group": "Router FP32 softmax",
+      "purpose": "对专家 logits 做稳定 softmax：减去行最大值，exp、求和、归一化；本行 fused_ops 区分求和或最终除法，产生 FP32 路由分数。",
+      "inputs": [
+        "N37"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256]{0:T(256)}",
+      "hlo_line": 73982,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N39",
+      "name": "fusion.1329",
+      "opcode": "fusion",
+      "group": "Router FP32 softmax",
+      "purpose": "对专家 logits 做稳定 softmax：减去行最大值，exp、求和、归一化；本行 fused_ops 区分求和或最终除法，产生 FP32 路由分数。",
+      "inputs": [
+        "N36",
+        "N38"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256]{0:T(256)}",
+      "hlo_line": 73983,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N40",
+      "name": "fusion.1328",
+      "opcode": "fusion",
+      "group": "Router FP32 softmax",
+      "purpose": "对专家 logits 做稳定 softmax：减去行最大值，exp、求和、归一化；本行 fused_ops 区分求和或最终除法，产生 FP32 路由分数。",
+      "inputs": [
+        "N36",
+        "N38",
+        "N39"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256,512]{1,0:T(8,128)}",
+      "hlo_line": 73984,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N41",
+      "name": "router_topk.123",
+      "opcode": "custom-call",
+      "group": "Router top-k",
+      "purpose": "Pallas top-k：从 512 个专家的路由分数选出 10 个专家及对应权重，输出 FP32 分数和 INT32 专家 ID。",
+      "inputs": [
+        "N40"
+      ],
+      "external_inputs": [],
+      "shape": "(f32[256,10]{1,0:T(8,128)}, s32[256,10]{1,0:T(8,128)})",
+      "hlo_line": 73985,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N42",
+      "name": "reduce.1246",
+      "opcode": "reduce",
+      "group": "索引/张量辅助",
+      "purpose": "reduce：为 attention/MoE 准备索引或 tensor 数据；使用本行 shape、metadata 和 HLO 确认它处理的是激活还是 INT32 调度数据。",
+      "inputs": [
+        "N41"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256]{0:T(256)}",
+      "hlo_line": 73986,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N43",
+      "name": "compare_select_fusion.365",
+      "opcode": "fusion",
+      "group": "Router top-k 归一化保护",
+      "purpose": "对选中专家权重之和设置下界，避免归一化分母过小；该路径随后除以此分母。",
+      "inputs": [
+        "N42"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256]{0:T(256)}",
+      "hlo_line": 73987,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N44",
+      "name": "fusion.1452",
+      "opcode": "fusion",
+      "group": "MoE 路由系数准备",
+      "purpose": "归一化 top-k 权重、屏蔽非本地专家，按路径转换 BF16/FP32，供 dense-expert 的加权合并使用。",
+      "inputs": [
+        "N41",
+        "N43"
+      ],
+      "external_inputs": [
+        "运行时输入/缓存"
+      ],
+      "shape": "f32[256,10]{1,0:T(8,128)}",
+      "hlo_line": 73988,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N45",
+      "name": "slice_reduce_fusion.1138",
+      "opcode": "fusion",
+      "group": "MoE top-k 拆列",
+      "purpose": "把每个 token 的 10 个路由 ID/系数拆成列，供逐专家匹配和系数累加使用。",
+      "inputs": [
+        "N44"
+      ],
+      "external_inputs": [],
+      "shape": "(f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)}, /*index=5*/f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)}, f32[256]{0:T(256)})",
+      "hlo_line": 73989,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N46",
+      "name": "subtract_select_fusion.56",
+      "opcode": "fusion",
+      "group": "MoE 专家 ID 本地化",
+      "purpose": "全局专家 ID 减去本 rank 的专家起点；不属于本地 64 个专家的条目标为无效。",
+      "inputs": [
+        "N41"
+      ],
+      "external_inputs": [
+        "运行时输入/缓存"
+      ],
+      "shape": "s32[256,10]{1,0:T(8,128)}",
+      "hlo_line": 73990,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N47",
+      "name": "slice_reduce_fusion.1139",
+      "opcode": "fusion",
+      "group": "MoE top-k 拆列",
+      "purpose": "把每个 token 的 10 个路由 ID/系数拆成列，供逐专家匹配和系数累加使用。",
+      "inputs": [
+        "N46"
+      ],
+      "external_inputs": [],
+      "shape": "(s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)}, /*index=5*/s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)}, s32[256]{0:T(256)})",
+      "hlo_line": 73991,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N48",
+      "name": "compare_reduce_fusion.56",
+      "opcode": "fusion",
+      "group": "MoE 本地路由系数",
+      "purpose": "把 top-k 列表展开为 token×本地专家的 FP32 系数矩阵，并归约得到活跃专家 mask；相同专家 ID 的贡献相加。",
+      "inputs": [
+        "N45",
+        "N47"
+      ],
+      "external_inputs": [],
+      "shape": "(pred[64]{0:T(512)(128)(4,1)}, f32[256,64]{1,0:T(8,128)})",
+      "hlo_line": 73992,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N49",
+      "name": "pad.386",
+      "opcode": "pad",
+      "group": "MoE 路由系数准备",
+      "purpose": "归一化 top-k 权重、屏蔽非本地专家，按路径转换 BF16/FP32，供 dense-expert 的加权合并使用。",
+      "inputs": [
+        "N48"
+      ],
+      "external_inputs": [],
+      "shape": "f32[256,128]{1,0:T(8,128)}",
+      "hlo_line": 73993,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N50",
+      "name": "convert_element_type.2711",
+      "opcode": "convert",
+      "group": "MoE 活跃专家 mask",
+      "purpose": "将本地专家是否被选中的布尔 mask 转成 kernel 接口所需 INT32，跳过没有 token 的专家。",
+      "inputs": [
+        "N48"
+      ],
+      "external_inputs": [],
+      "shape": "s32[64]{0:T(128)}",
+      "hlo_line": 73994,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N51",
+      "name": "all-gather.135.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "EP dispatch / all-gather",
+      "purpose": "收集该组 token 激活、router logits 或路由计划，供本地专家处理；实际 replica groups={{0,4,6,2},{1,5,7,3}}，输出 bf16[256,4096]{1,0:T(16,128)(2,1)}。异步边界不能重复计费。",
+      "inputs": [
+        "N34"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[256,4096]{1,0:T(16,128)(2,1)}",
+      "hlo_line": 73995,
+      "collectives": [
+        {
+          "opcode": "all-gather",
+          "shape": "bf16[256,4096]{1,0:T(16,128)(2,1)}",
+          "replica_groups": "{{0,4,6,2},{1,5,7,3}}",
+          "attrs": "channel_id=1, replica_groups={{0,4,6,2},{1,5,7,3}}, dimensions={0}, use_global_device_ids=true, metadata={op_name=\"distributed.all_gather_into_tensor/distributed.all_gather_into_tensor\" stack_frame_id=231}"
+        }
+      ],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N52",
+      "name": "copy.1585",
+      "opcode": "copy",
+      "group": "数据复制/布局物化",
+      "purpose": "编译器生成的实际数据复制或物理布局变换；比较 operand_shapes 与 shape 可区分 tiling/维度顺序和 memory space 的变化。",
+      "inputs": [
+        "N51"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[256,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73996,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N53",
+      "name": "dense_expert_moe-e_64-m_256-h_4096-i_1024-buffers_3.243",
+      "opcode": "custom-call",
+      "group": "路由专家计算",
+      "purpose": "小 batch dense-expert MoE：不按专家重排 token，遍历活跃本地专家，融合 FP8 gate/up、SiLU×up、down 和路由加权；用 FP32 VMEM 累加后输出 BF16。跨 rank combine 在外部。",
+      "inputs": [
+        "N49",
+        "N50",
+        "N52"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[256,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 73997,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N54",
+      "name": "compare_select_fusion.291",
+      "opcode": "fusion",
+      "group": "FP8 量化 scale",
+      "purpose": "计算/保护动态 FP8 scale：max(abs(x))/448；全零行使用非零替代 scale，避免除零。部分 fusion 同时生成 MoE 的有效行 mask。",
+      "inputs": [
+        "N34"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 74000,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N55",
+      "name": "clamp_convert_fusion.126",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按动态 scale 缩放并截断到 FP8 可表示范围，再转换为 FP8，供后续 MXU GEMM 使用。",
+      "inputs": [
+        "N34",
+        "N54"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,4096]{1,0:T(32,128)(4,1)}",
+      "hlo_line": 74001,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N56",
+      "name": "fusion.543",
+      "opcode": "fusion",
+      "group": "共享专家 gate/up",
+      "purpose": "共享专家的 FP8 gate/up GEMM；所有 token 都经过该分支。",
+      "inputs": [
+        "N54",
+        "N55"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,1024]{1,0:T(16,128)(2,1)}",
+      "hlo_line": 74002,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N57",
+      "name": "abs_reduce_fusion.236",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按 token 行计算 max(abs(x))，得到动态 FP8 量化 scale；可能融合前面的 RMSNorm/门控操作。",
+      "inputs": [
+        "N56"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64]{0:T(256)(128)(2,1)}",
+      "hlo_line": 74003,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N58",
+      "name": "compare_select_fusion.290",
+      "opcode": "fusion",
+      "group": "FP8 量化 scale",
+      "purpose": "计算/保护动态 FP8 scale：max(abs(x))/448；全零行使用非零替代 scale，避免除零。部分 fusion 同时生成 MoE 的有效行 mask。",
+      "inputs": [
+        "N57"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 74004,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N59",
+      "name": "fusion.770",
+      "opcode": "fusion",
+      "group": "共享专家 gate",
+      "purpose": "hidden→一个标量 logit；经 sigmoid 后控制该 token 的共享专家贡献。",
+      "inputs": [
+        "N34"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64]{0:T(256)(128)(2,1)}",
+      "hlo_line": 74005,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N60",
+      "name": "clamp_convert_fusion.191",
+      "opcode": "fusion",
+      "group": "FP8 激活量化",
+      "purpose": "按动态 scale 缩放并截断到 FP8 可表示范围，再转换为 FP8，供后续 MXU GEMM 使用。",
+      "inputs": [
+        "N56",
+        "N58"
+      ],
+      "external_inputs": [],
+      "shape": "f8e4m3fn[64,512]{1,0:T(32,128)(4,1)}",
+      "hlo_line": 74006,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N61",
+      "name": "reduce-scatter.247.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "EP combine / DP reduce-scatter",
+      "purpose": "跨同 TP rank 的 DP 组归约专家贡献，并返回本 DP rank 的 token 切片；replica groups={{0,4,6,2},{1,5,7,3}}。之后仍需 TP 归约以合并另一半专家贡献。",
+      "inputs": [
+        "N53"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 74007,
+      "collectives": [
+        {
+          "opcode": "reduce-scatter",
+          "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+          "replica_groups": "{{0,4,6,2},{1,5,7,3}}",
+          "attrs": "channel_id=1, replica_groups={{0,4,6,2},{1,5,7,3}}, use_global_device_ids=true, dimensions={0}, to_apply=%region_357.411.clone, metadata={op_name=\"distributed.reduce_scatter_tensor_coalesced/distributed.reduce_scatter_tensor\" stack_frame_id=185}"
+        }
+      ],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N62",
+      "name": "fusion.473",
+      "opcode": "fusion",
+      "group": "共享专家 down/合并",
+      "purpose": "共享专家的 down GEMM 投影回 hidden；可融合其 gate、路由专家输出相加及后续归一化的部分计算。",
+      "inputs": [
+        "N58",
+        "N59",
+        "N60",
+        "N61"
+      ],
+      "external_inputs": [
+        "权重/scale"
+      ],
+      "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 74008,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N63",
+      "name": "all-reduce.380.cloned.1.call-done",
+      "opcode": "async-done",
+      "group": "TP all-reduce",
+      "purpose": "对 TP 分片的部分输出求和；实际 replica groups={{0,1},{2,3},{4,5},{6,7}}。start/update/done 是同一次通信的控制边界。",
+      "inputs": [
+        "N62"
+      ],
+      "external_inputs": [],
+      "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+      "hlo_line": 74013,
+      "collectives": [
+        {
+          "opcode": "all-reduce",
+          "shape": "bf16[64,4096]{1,0:T(8,128)(2,1)}",
+          "replica_groups": "{{0,1},{2,3},{4,5},{6,7}}",
+          "attrs": "channel_id=1, replica_groups={{0,1},{2,3},{4,5},{6,7}}, use_global_device_ids=true, to_apply=%region_358.412.clone, metadata={op_name=\"distributed.all_reduce/distributed.all_reduce\" stack_frame_id=177}"
+        }
+      ],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N64",
+      "name": "multiply_reduce_fusion.112",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N31",
+        "N32",
+        "N63"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 74014,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    },
+    {
+      "id": "N65",
+      "name": "add_rsqrt_fusion.186",
+      "opcode": "fusion",
+      "group": "RMSNorm/residual",
+      "purpose": "计算均方、加 epsilon、rsqrt 和归一化；融合版本同时处理 residual add，具体融合范围见 HLO。",
+      "inputs": [
+        "N64"
+      ],
+      "external_inputs": [],
+      "shape": "f32[64]{0:T(128)}",
+      "hlo_line": 74015,
+      "collectives": [],
+      "observed_body_occurrences": {}
+    }
+  ]
+}

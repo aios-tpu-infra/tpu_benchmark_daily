@@ -21,7 +21,7 @@ TTFT P50/P90/P99。
 
 ## 编译后算子分析
 
-[Qwen3.5-397B prefill / decode 单层算子报告（2026-09-23）](reports/qwen3.5-397b-layer-ops-20260923/README.md)：基于实际 TPU trace 与最终 HLO，覆盖 DP8、PCP8 prefill 和 DP4/TP2 decode，附逐条算子、shape、用途及验证记录；默认关注 ≥1 µs 事件，原始清单完整保留。
+[Qwen3.5-397B 每层计算流（2026-09-23）](reports/qwen3.5-397b-layer-ops-20260923/COMPUTE-FLOWS.md)：覆盖 DP8、PCP8 prefill 和 DP4/TP2 decode，按张量依赖说明 GDN / full-attention / MoE 的算子、shape、分支和通信。[采集报告与原始清单](reports/qwen3.5-397b-layer-ops-20260923/README.md)用于核对 trace 和 HLO；默认关注 ≥1 µs 事件。
 
 ## Recent benchmark throughput
 
